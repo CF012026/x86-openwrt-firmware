@@ -1,0 +1,240 @@
+name: 编译 X86_64 固件
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_ccache:
+        description: '清理 ccache 后全新编译（改过插件列表时勾上）'
+        type: boolean
+        default: false
+
+# ==================== 环境变量 ====================
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-24.10
+  CONFIG_FILE: x86.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    # 只编 daed 一个变体（eBPF 内核态方案，与 360T7 版一致）
+    strategy:
+      fail-fast: false
+      matrix:
+        proxy: [daed]
+
+    runs-on: ubuntu-22.04
+
+    steps:
+    # ---------- 1. 检出仓库 ----------
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 初始化构建编号
+      run: echo "FILE_DATE=_$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
+
+    # ---------- 2. 释放磁盘空间 ----------
+    - name: 释放磁盘空间
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
+    # ---------- 3. 安装编译依赖 ----------
+    - name: 安装编译依赖
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo timedatectl set-timezone "$TZ"
+        sudo apt update -y
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler dwarves ecj \
+          fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged \
+          help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev \
+          libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev \
+          libssl-dev libtool lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full \
+          patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools \
+          qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl \
+          unzip vim wget xmlto xxd zlib1g-dev zstd
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        echo "=== pahole 版本（daed 的 BTF 需要）==="
+        pahole --version || echo "  未安装 pahole"
+
+    # ---------- 4. 克隆 ImmortalWrt 源码 ----------
+    - name: 克隆源码
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth 1 openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    # ---------- 5. 追加第三方软件源 ----------
+    - name: 加载自定义 feeds
+      run: |
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    # ---------- 6. 更新并安装 feeds ----------
+    - name: 更新 feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    # 官方 feeds 全量安装；第三方 feeds 按需安装（瘦身关键，见 360T7 版教训）
+    - name: 安装 feeds 软件包
+      run: |
+        cd openwrt
+        # 官方源：全量
+        ./scripts/feeds install -a -p packages
+        ./scripts/feeds install -a -p luci
+        ./scripts/feeds install -a -p routing
+        # kenzok8/small：只要 daed 本体；可视化界面 luci-app-daed 由 files/ 直接烤入
+        ./scripts/feeds install daed
+        # lucky / easytier：只装本体 + LuCI 界面 + 中文包
+        ./scripts/feeds install lucky luci-app-lucky luci-i18n-lucky-zh-cn
+        ./scripts/feeds install easytier luci-app-easytier luci-i18n-easytier-zh-cn
+        # iStore 全家桶（linkease 官方推荐集成方式）
+        ./scripts/feeds install -d y -p istore luci-app-store
+        ./scripts/feeds install -p nas_luci luci-app-quickstart luci-app-istorex \
+          luci-app-linkease luci-app-ddnsto luci-app-diskman luci-app-unishare luci-nginxer
+        # Docker
+        ./scripts/feeds install dockerd docker docker-compose luci-app-dockerman
+        echo "===== 各第三方 feed 实际注册的包 ====="
+        for f in small lucky easytier istore nas nas_luci; do
+          echo "--- $f ---"; ls package/feeds/$f/ 2>/dev/null | head -30 || echo "（无）"
+        done
+
+    # ---------- 7. 注入私人信息 + 拼接编译配置 ----------
+    - name: 注入私人信息
+      env:
+        ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+        PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+      run: |
+        [ -e files ] && cp -r files openwrt/
+        # 私人配置（Lucky 数据 / EasyTier config.toml）不在公开仓库里，
+        # 编译期从私有仓库 x86-firmware-private 拉取，覆盖进 files/
+        if [ -n "$PRIVATE_REPO_TOKEN" ]; then
+          git clone --depth 1 \
+            "https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/CF012026/x86-firmware-private.git" \
+            /tmp/private-files
+          cp -a /tmp/private-files/files/. files/
+          echo "===== 私人配置已合并（仅列文件名，不显示内容）====="
+          find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+        else
+          echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
+        fi
+        # 基础配置 + 该变体对应的代理后端配置
+        cat $CONFIG_FILE proxy-${{ matrix.proxy }}.config > openwrt/.config
+        echo "===== 使用的基础配置 + proxy-${{ matrix.proxy }}.config ====="
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    # ---------- 8. 生成配置并预下载依赖包 ----------
+    - name: 生成配置并预下载
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    # ---------- 8.5 关键包生效校验（提前失败，避免白编 3 小时）----------
+    - name: 校验关键包是否入选
+      run: |
+        cd openwrt
+        echo "===== 关键包入选情况 ====="
+        grep -E "^CONFIG_PACKAGE_(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex)=" .config || true
+        FAILED=0
+        # 代理后端
+        grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }
+        # BTF 四件套（daed crash 的根因，缺一不可；REDUCED=y 会静默砍掉 BTF）
+        grep -q "^CONFIG_KERNEL_DEBUG_INFO_BTF=y" .config || { echo "::error::CONFIG_KERNEL_DEBUG_INFO_BTF 未开启 —— daed 必崩！"; FAILED=1; }
+        grep -q "^CONFIG_KERNEL_DEBUG_INFO=y" .config || { echo "::error::CONFIG_KERNEL_DEBUG_INFO 未开启（BTF 的前置条件）"; FAILED=1; }
+        grep -q "^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y" .config && { echo "::error::CONFIG_KERNEL_DEBUG_INFO_REDUCED 仍是=y，会把 BTF 静默砍掉！"; FAILED=1; }
+        # luci-app-daede 已弃用
+        grep -q "^CONFIG_PACKAGE_luci-app-daede=y" .config && { echo "::error::luci-app-daede 应已移除，不应再被选中"; FAILED=1; }
+        # 核心 app（缺了直接拦下）
+        for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+                   luci-theme-argon luci-app-argon-config \
+                   dockerd docker docker-compose luci-app-dockerman \
+                   luci-app-store luci-app-quickstart luci-app-istorex; do
+          grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || { echo "::error::${pkg} 未被选中！"; FAILED=1; }
+        done
+        # 瘦身黑名单：这些包不允许出现在 .config（=m 也不行）
+        for pkg in mihomo clashoo luci-app-clashoo nikki luci-app-nikki momo luci-app-momo luci-app-fchomo; do
+          grep -qE "^CONFIG_PACKAGE_${pkg}=[ym]" .config && { echo "::error::瘦身失败：${pkg} 被拉进了编译配置！"; FAILED=1; }
+        done
+        # 软件空间校验
+        grep -q "^CONFIG_TARGET_ROOTFS_PARTSIZE=4096" .config || { echo "::error::ROOTFS_PARTSIZE 不是 4096，软件空间 4G 未生效！"; FAILED=1; }
+        [ "$FAILED" -eq 0 ] || exit 1
+
+    # ---------- 9. 恢复 ccache ----------
+    - name: 恢复 ccache
+      if: ${{ !inputs.clean_ccache }}
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: ccache-x86-${{ matrix.proxy }}-${{ github.sha }}
+        restore-keys: |
+          ccache-x86-${{ matrix.proxy }}-
+
+    # ---------- 10. 编译固件 ----------
+    - name: 编译固件
+      run: |
+        cd openwrt
+        export USE_CCACHE=1
+        export CCACHE_DIR="$PWD/.ccache"
+        export CCACHE_COMPILERCHECK=content
+        export CCACHE_COMPRESS=1
+        export CCACHE_MAXSIZE=2G
+        echo "编译线程数: $(nproc)"
+        make -j$(($(nproc) + 1)) || make -j1 || make -j1 V=s
+        echo "FIRMWARE=$PWD/bin/targets/x86/64" >> $GITHUB_ENV
+
+    # ---------- 10.5 产物 manifest 终检 ----------
+    - name: 产物 manifest 终检
+      run: |
+        cd openwrt/bin/targets/x86/64
+        MANIFEST=$(ls *.manifest | head -1)
+        echo "===== $MANIFEST 关键包实际入选情况 ====="
+        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex) " "$MANIFEST" || true
+        FAILED=0
+        # 核心 app 终检
+        for pkg in daed lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+                   luci-theme-argon dockerd docker docker-compose luci-app-dockerman \
+                   luci-app-store luci-app-quickstart luci-app-istorex; do
+          grep -q "^${pkg} " "$MANIFEST" || { echo "::error::manifest 中没有 ${pkg}！"; FAILED=1; }
+        done
+        # 瘦身黑名单终检
+        for pkg in mihomo clashoo luci-app-clashoo nikki luci-app-nikki momo luci-app-momo luci-app-fchomo luci-app-daede luci-i18n-daede-zh-cn; do
+          grep -qE "^${pkg} " "$MANIFEST" && { echo "::error::瘦身失败：${pkg} 混进了最终镜像！"; FAILED=1; }
+        done
+        [ "$FAILED" -eq 0 ] || exit 1
+        echo "===== 镜像总体积 ====="
+        ls -lh *.img.gz 2>/dev/null || ls -lh
+
+    # ---------- 11. 整理产物 ----------
+    - name: 整理固件
+      if: ${{ !cancelled() }}
+      run: |
+        cd openwrt/bin/targets/x86/64
+        rm -rf packages
+        echo "===== 编译产物 ====="
+        ls -lh
+        df -hT
+
+    # ---------- 12. 上传固件（仅 Artifacts，需登录可见）----------
+    - name: 上传固件
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: X86-64-${{ matrix.proxy }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+        retention-days: 30
