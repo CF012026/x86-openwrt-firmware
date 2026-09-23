@@ -96,7 +96,9 @@ jobs:
         ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a -p routing
         # kenzok8/small：只要 daed 本体；可视化界面 luci-app-daed 由 files/ 直接烤入
-        ./scripts/feeds install daed
+        # 注意：官方 packages feed 也收录了 daed（1.24.0 旧版）且优先级更高，
+        # 裸 install 会装到旧版（360T7 run#9 教训），必须 -f -p small 强制指定
+        ./scripts/feeds install -f -p small daed
         # lucky / easytier：只装本体 + LuCI 界面 + 中文包
         ./scripts/feeds install lucky luci-app-lucky luci-i18n-lucky-zh-cn
         ./scripts/feeds install easytier luci-app-easytier luci-i18n-easytier-zh-cn
@@ -212,6 +214,9 @@ jobs:
                    luci-app-store luci-app-quickstart luci-app-istorex; do
           grep -q "^${pkg} " "$MANIFEST" || { echo "::error::manifest 中没有 ${pkg}！"; FAILED=1; }
         done
+        # daed 版本终检：必须是 small feed 的日期版快照，不许被 packages feed 抢占
+        grep -E "^daed - " "$MANIFEST" | grep -qE "^daed - 20[0-9]{2}\." \
+          || { echo "::error::daed 版本异常：$(grep '^daed ' $MANIFEST)（预期 small feed 快照）"; FAILED=1; }
         # 瘦身黑名单终检
         for pkg in mihomo clashoo luci-app-clashoo nikki luci-app-nikki momo luci-app-momo luci-app-fchomo luci-app-daede luci-i18n-daede-zh-cn; do
           grep -qE "^${pkg} " "$MANIFEST" && { echo "::error::瘦身失败：${pkg} 混进了最终镜像！"; FAILED=1; }
