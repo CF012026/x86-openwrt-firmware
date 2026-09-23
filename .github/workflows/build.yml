@@ -119,9 +119,11 @@ jobs:
         ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
         PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
       run: |
-        [ -e files ] && cp -r files openwrt/
         # 私人配置（Lucky 数据 / EasyTier config.toml）不在公开仓库里，
-        # 编译期从私有仓库 x86-firmware-private 拉取，覆盖进 files/
+        # 编译期从私有仓库 x86-firmware-private 拉取，先合并进 files/
+        # 【顺序至关重要】必须先合并私人配置、再统一拷贝进 openwrt/files/
+        # （2026-09-23 修复：原顺序先拷贝后合并，私人配置从未进入固件）
+        mkdir -p files
         if [ -n "$PRIVATE_REPO_TOKEN" ]; then
           git clone --depth 1 \
             "https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/CF012026/x86-firmware-private.git" \
@@ -132,12 +134,23 @@ jobs:
         else
           echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
         fi
+        [ -e files ] && cp -r files openwrt/
         # 基础配置 + 该变体对应的代理后端配置
         cat $CONFIG_FILE proxy-${{ matrix.proxy }}.config > openwrt/.config
         echo "===== 使用的基础配置 + proxy-${{ matrix.proxy }}.config ====="
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    # ---------- 7.5 私人配置落位断言（防再犯拷贝顺序错误）----------
+    - name: 私人配置落位断言
+      run: |
+        for f in files/etc/config/lucky files/etc/config/lucky.daji/lucky.conf \
+                 files/etc/easytier/config.toml files/etc/config/easytier \
+                 files/etc/uci-defaults/98-root-password; do
+          test -e "openwrt/$f" || { echo "::error::openwrt/$f 缺失！私人配置/密码未烤入"; exit 1; }
+        done
+        echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
 
     # ---------- 8. 生成配置并预下载依赖包 ----------
     - name: 生成配置并预下载
