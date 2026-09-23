@@ -1,0 +1,24 @@
+#!/bin/sh
+# ============================================================
+# 97-easytier-firewall
+# 首启执行一次：补齐 lan <-> EasyTier 跨 zone 转发。
+#
+# 背景：fw4 里即使 zone 的 forward 策略是 ACCEPT，跨 zone 转发
+# 也必须显式声明 forwarding，否则默认 REJECT。表现为：
+# 路由器本机能 ping 通隧道对端，但局域网里的电脑不通。
+# EasyTier init 的 auto_config_firewall 只会建 zone，不会建
+# forwarding，所以这里补上双向两条。
+# ============================================================
+
+uci -q delete firewall.et_fwd_lan2et
+uci set firewall.et_fwd_lan2et=forwarding
+uci set firewall.et_fwd_lan2et.src='lan'
+uci set firewall.et_fwd_lan2et.dest='EasyTier'
+
+uci -q delete firewall.et_fwd_et2lan
+uci set firewall.et_fwd_et2lan=forwarding
+uci set firewall.et_fwd_et2lan.src='EasyTier'
+uci set firewall.et_fwd_et2lan.dest='lan'
+
+uci commit firewall
+exit 0

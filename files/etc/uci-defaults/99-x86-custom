@@ -1,0 +1,36 @@
+#!/bin/sh
+# ============================================================
+# 99-x86-custom
+# 首次启动时自动执行一次，执行后自动删除。
+# 作用：管理地址、主机名、NTP、代理兼容性等基础配置。
+#
+# 注意：这里刻意不写死 WAN 口 MAC、不配置 PPPoE 拨号——
+# x86 软路由的上网方式因环境而异，首次开机后在 LuCI 里自行配置。
+# ============================================================
+
+# ---------- 管理地址 ----------
+uci -q set network.lan.ipaddr='192.168.88.1'
+uci -q set network.lan.netmask='255.255.255.0'
+
+# ---------- 主机名 / 时区 / NTP ----------
+uci -q set system.@system[0].hostname='X86'
+uci -q set system.@system[0].timezone='CST-8'
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+uci -q set system.@system[0].log_size='64'
+uci -q delete system.ntp.server 2>/dev/null
+uci -q add_list system.ntp.server='ntp.tencent.com'
+uci -q add_list system.ntp.server='ntp.aliyun.com'
+uci -q add_list system.ntp.server='cn.ntp.org.cn'
+
+# ---------- 关闭所有流量卸载，保障 daed 透明代理生效 ----------
+# 一旦开启卸载，被加速的连接会绕过内核协议栈走快速路径，
+# daed 挂在内核 eBPF 上的规则就抓不到这些流量，表现为
+# "代理装好了但部分网站不走代理"。x86 性能余量大，关掉不亏。
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+
+uci -q commit network
+uci -q commit system
+uci -q commit firewall
+
+exit 0
