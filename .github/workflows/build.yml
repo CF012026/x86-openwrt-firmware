@@ -96,9 +96,14 @@ jobs:
         ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a -p routing
         # kenzok8/small：只要 daed 本体；可视化界面 luci-app-daed 由 files/ 直接烤入
-        # 注意：官方 packages feed 也收录了 daed（1.24.0 旧版）且优先级更高，
-        # 裸 install 会装到旧版（360T7 run#9 教训），必须 -f -p small 强制指定
-        ./scripts/feeds install -f -p small daed
+        # 注意：官方 packages feed 也收录了 daed（1.24.0 旧版）且优先级更高，裸 install
+        # 会装到旧版。feeds 脚本的 -f 对已安装的同名包是静默 no-op（只对 core 包生效），
+        # 必须先 uninstall 再从 small 装，并断言符号链接换源成功（360T7 run#10 教训）：
+        ./scripts/feeds uninstall daed
+        ./scripts/feeds install -p small daed
+        test -e package/feeds/small/daed || { echo "::error::daed 未从 small feed 注册！"; exit 1; }
+        test ! -e package/feeds/packages/daed || { echo "::error::packages feed 的 daed 1.24.0 仍被注册！"; exit 1; }
+        echo "✓ daed 符号链接: $(readlink package/feeds/small/daed)"
         # lucky / easytier：只装本体 + LuCI 界面 + 中文包
         ./scripts/feeds install lucky luci-app-lucky luci-i18n-lucky-zh-cn
         ./scripts/feeds install easytier luci-app-easytier luci-i18n-easytier-zh-cn
