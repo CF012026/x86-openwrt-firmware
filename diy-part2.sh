@@ -39,4 +39,24 @@ fi
 # ---------- 回显校验（敏感值打码）----------
 echo "===== 注入结果校验 ====="
 ls -la files/etc/uci-defaults/
+
+# ---------- daed Makefile 补丁：补写缺失的 +@NEED_BPF_TOOLCHAIN ----------
+# 背景：small feed 新版 daed（2026.09.23+）编译期要用 clang 现场编 eBPF
+#（PKG_BUILD_DEPENDS:=bpf-headers + include bpf.mk），但 kenzok8 的 DEPENDS
+# 漏写了 +@NEED_BPF_TOOLCHAIN —— 上游正是靠它 select 出自建 llvm-bpf 工具链。
+# 缺了它 CLANG 会解析成 /invalid/clang，bpf-headers 编译直接报
+# "LLVM/clang version too old. Minimum required: 12"（2026-09-24 run 实锤）。
+# 这里按上游其他 eBPF 包（xdp-tools 等）的标准写法补上。
+DAED_MK="package/feeds/small/daed/Makefile"
+if [ -f "$DAED_MK" ]; then
+    if ! grep -q "NEED_BPF_TOOLCHAIN" "$DAED_MK"; then
+        sed -i 's|+@KERNEL_XDP_SOCKETS \\|+@KERNEL_XDP_SOCKETS +@NEED_BPF_TOOLCHAIN \\|' "$DAED_MK"
+    fi
+    grep -q "NEED_BPF_TOOLCHAIN" "$DAED_MK" || {
+        echo "::error::daed Makefile 打补丁失败（+@NEED_BPF_TOOLCHAIN 未写入），上游 Makefile 格式可能已变"; exit 1;
+    }
+    echo "== daed Makefile 已补 +@NEED_BPF_TOOLCHAIN（编译期自建 llvm-bpf 的触发开关）"
+else
+    echo "::error::找不到 $DAED_MK —— feeds install 可能未完成，无法打工具链补丁"; exit 1
+fi
 exit 0

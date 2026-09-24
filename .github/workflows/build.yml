@@ -180,9 +180,12 @@ jobs:
         grep -q "^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y" .config && { echo "::error::CONFIG_KERNEL_DEBUG_INFO_REDUCED 仍是=y，会把 BTF 静默砍掉！"; FAILED=1; }
         # luci-app-daede 已弃用
         grep -q "^CONFIG_PACKAGE_luci-app-daede=y" .config && { echo "::error::luci-app-daede 应已移除，不应再被选中"; FAILED=1; }
-        # eBPF 工具链（新版 daed 编译期要用 clang 编 eBPF，NEED_BPF_TOOLCHAIN
-        # 无人置位会导致 CLANG=/invalid/clang → bpf-headers 编译失败）
-        grep -q "^CONFIG_SDK_LLVM_BPF=y" .config || { echo "::error::SDK_LLVM_BPF 被 defconfig 丢弃 —— daed 编译期 eBPF 工具链会缺失！"; FAILED=1; }
+        # eBPF 工具链（新版 daed 编译期要用 clang 编 eBPF）：
+        # diy-part2.sh 已给 daed Makefile 补了 +@NEED_BPF_TOOLCHAIN（上游标准机制），
+        # defconfig 后应能看到 NEED_BPF_TOOLCHAIN=y 和 USE_LLVM_BUILD=y。
+        # 注意：SDK_LLVM_BPF 挂在 SDK 条件下会被 defconfig 丢弃，不能作为判据
+        #（2026-09-24 run 实锤：它被丢弃但 USE_LLVM_BUILD=y 正常落盘）。
+        grep -q "^CONFIG_NEED_BPF_TOOLCHAIN=y" .config || { echo "::error::NEED_BPF_TOOLCHAIN 未生效 —— daed 工具链补丁可能没打上！"; FAILED=1; }
         grep -q "^CONFIG_USE_LLVM_BUILD=y" .config || { echo "::error::USE_LLVM_BUILD 未生效 —— llvm-bpf 工具链不会被构建！"; FAILED=1; }
         # 核心 app（缺了直接拦下）
         for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
