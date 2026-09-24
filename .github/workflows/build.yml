@@ -180,6 +180,10 @@ jobs:
         grep -q "^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y" .config && { echo "::error::CONFIG_KERNEL_DEBUG_INFO_REDUCED 仍是=y，会把 BTF 静默砍掉！"; FAILED=1; }
         # luci-app-daede 已弃用
         grep -q "^CONFIG_PACKAGE_luci-app-daede=y" .config && { echo "::error::luci-app-daede 应已移除，不应再被选中"; FAILED=1; }
+        # eBPF 工具链（新版 daed 编译期要用 clang 编 eBPF，NEED_BPF_TOOLCHAIN
+        # 无人置位会导致 CLANG=/invalid/clang → bpf-headers 编译失败）
+        grep -q "^CONFIG_SDK_LLVM_BPF=y" .config || { echo "::error::SDK_LLVM_BPF 被 defconfig 丢弃 —— daed 编译期 eBPF 工具链会缺失！"; FAILED=1; }
+        grep -q "^CONFIG_USE_LLVM_BUILD=y" .config || { echo "::error::USE_LLVM_BUILD 未生效 —— llvm-bpf 工具链不会被构建！"; FAILED=1; }
         # 核心 app（缺了直接拦下）
         for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
                    luci-theme-argon luci-app-argon-config \
