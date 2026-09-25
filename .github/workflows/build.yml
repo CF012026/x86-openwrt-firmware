@@ -11,7 +11,11 @@ on:
 # ==================== 环境变量 ====================
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: openwrt-24.10
+  # 2026-09-25 起切换 openwrt-25.12（6.12 内核/MGLRU/apk；24.10 已于 2026-09 EOL）。
+  # 25.12 packages feed 默认 Go 1.26（GO_DEFAULT_VERSION:=1.26），daed 的
+  # go.mod requires go>=1.26 与 GOEXPERIMENT=simd 天然满足，无需 Go 升级补丁
+  #（24.10 路径的失败实锤：run 35988684619 报 go 1.23.12 + unknown GOEXPERIMENT simd）。
+  REPO_BRANCH: openwrt-25.12
   CONFIG_FILE: x86.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
