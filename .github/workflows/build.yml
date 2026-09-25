@@ -175,6 +175,49 @@ jobs:
         cd openwrt
         echo "===== 关键包入选情况 ====="
         grep -E "^CONFIG_PACKAGE_(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex)=" .config || true
+        # ---------- 8.6 依赖链诊断（25.12 defconfig 静默丢弃排查）----------
+        python3 - <<'PYEOF'
+        import re, sys
+        try:
+            info = open('tmp/.packageinfo').read()
+        except FileNotFoundError:
+            print("!! tmp/.packageinfo 不存在"); sys.exit(0)
+        offers = set()
+        blocks = re.split(r'(?m)^Package: ', info)
+        deps = {}
+        for b in blocks[1:]:
+            name = b.split('\n', 1)[0].strip()
+            offers.add(name)
+            m = re.search(r'(?m)^Depends: (.*)$', b)
+            deps[name] = m.group(1) if m else ''
+            for m2 in re.finditer(r'(?m)^Provides: (.*)$', b):
+                for p in re.split(r'[,\s]+', m2.group(1)):
+                    if p: offers.add(p)
+        def why(pkg):
+            if pkg not in deps and pkg not in offers:
+                print(f"  [!!] {pkg}: 未注册（tmp/.packageinfo 无此包）")
+                return
+            d = deps.get(pkg, '')
+            missing = []
+            for tok in re.split(r'[,\s]+', d):
+                t = tok.strip()
+                if not t or t.startswith('@'): continue
+                base = re.sub(r'^[+\-]', '', t).split(':')[0].split('(')[0].strip()
+                if base and base not in offers:
+                    missing.append(tok)
+            print(f"  {pkg}: 已注册; Depends: {d or '(无)'}")
+            print(f"    -> 缺失依赖: {missing if missing else '无'}")
+        print("===== iStore 链路依赖诊断 =====")
+        for p in ['luci-app-istorex', 'luci-app-quickstart', 'quickstart',
+                  'luci-app-store', 'luci-lib-taskd', 'taskd', 'luci-lib-xterm',
+                  'mount-utils', 'script-utils', 'mdadm', 'coreutils-stty',
+                  'shadow-utils', 'shadow-useradd', 'lsblk', 'block-mount',
+                  'e2fsprogs', 'parted', 'smartd', 'smartmontools-drivedb',
+                  'ip-full', 'curl', 'tar', 'libuci-lua', 'bash', 'ubus', 'uci', 'procd']:
+            why(p)
+        PYEOF
+        # 重新单线程扫描 packageinfo，抓 istore 三件套的解析报错
+        make tmp/.packageinfo -j1 V=s 2>&1 | grep -B3 -A10 -iE "luci-app-store|luci-app-quickstart|luci-app-istorex|error" | head -80 || true
         FAILED=0
         # 代理后端
         grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }
