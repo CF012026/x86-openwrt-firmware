@@ -248,7 +248,7 @@ jobs:
         # 把 iStore 全链强制 =y 再跑一次 defconfig，看谁被 Kconfig 剪掉——
         # 被剪枝的包 = 其依赖在 Kconfig 层面不可满足（packageinfo 层面无法发现），
         # 最靠近叶子端的被剪包就是断链根因。
-        CHAIN="luci-app-store luci-app-quickstart luci-app-istorex quickstart luci-lib-taskd taskd luci-lib-xterm luci-lua-runtime luci-lib-nixio lua liblua liblucihttp liblucihttp-lua libubus-lua ucode-mod-lua luci-lib-base luci-lib-ip luci-lib-jsonc luci-base libuci-lua mount-utils curl tar libcrypt-compat"
+        CHAIN="luci-app-store luci-app-quickstart luci-app-istorex luci-app-eqos quickstart luci-lib-taskd taskd luci-lib-xterm luci-lua-runtime luci-lib-nixio lua liblua liblucihttp liblucihttp-lua libubus-lua ucode-mod-lua luci-lib-base luci-lib-ip luci-lib-jsonc luci-base libuci-lua mount-utils curl tar libcrypt-compat"
         cp .config /tmp/config.bak
         for p in $CHAIN; do
           if grep -qE "^# CONFIG_PACKAGE_${p} is not set$" .config; then
@@ -274,6 +274,32 @@ jobs:
         done
         echo "===== libc 配置 ====="
         grep -E "^CONFIG_LIBC=|^CONFIG_USE_GLIBC|^CONFIG_USE_MUSL" .config || echo "（默认 musl）"
+        # ---------- 8.8 Kconfig 数据源一锤定音诊断 ----------
+        # 「无符号」有两种可能：① tmp/.config-package.in 根本没生成该条目（生成层被丢：
+        #   buildonly/ignore/category）；② 条目在但 depends 不可满足/不可见（kconfig 层）。
+        # 看条目数即可分辨，看完整定义即可定位是谁的依赖断了。
+        echo "===== 8.8 Kconfig 数据源诊断 ====="
+        echo "--- tmp/.config-package.in 条目计数 ---"
+        for p in luci-app-store luci-app-quickstart luci-app-istorex tar libcrypt-compat \
+                 luci-app-eqos luci-app-passwall nikki curl quickstart luci-base; do
+          kc=$(grep -c "^config PACKAGE_${p}\$" tmp/.config-package.in 2>/dev/null || true)
+          echo "  PACKAGE_${p}: 条目数=${kc:-0}"
+        done
+        echo "--- 关键包完整 Kconfig 定义 ---"
+        for p in luci-app-store luci-app-istorex tar libcrypt-compat luci-app-eqos; do
+          echo "[$p]"
+          awk -v pat="^config PACKAGE_${p}\$" '$0 ~ pat {f=1} f {print} f && /^$/{exit}' tmp/.config-package.in | head -25
+        done
+        echo "--- tmp/.packageinfo 元数据头 ---"
+        for p in luci-app-store tar libcrypt-compat luci-app-eqos luci-app-passwall; do
+          echo "[$p]"
+          sed -n "/^Package: ${p}\$/,/^Description:/p" tmp/.packageinfo \
+            | grep -E "^(Source-Makefile|Category|Section|Type|Build-Only|Hidden|Repository|Provides|Default):" \
+            || echo "  （packageinfo 无记录）"
+        done
+        echo "--- .config-package.in 概况 ---"
+        wc -l tmp/.config-package.in
+        grep -c "^config PACKAGE_" tmp/.config-package.in || true
         FAILED=0
         # 代理后端
         grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }
@@ -376,3 +402,15 @@ jobs:
         name: X86-64-${{ matrix.proxy }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
         retention-days: 30
+
+    # ---------- 13. 失败时上传配置诊断快照 ----------
+    - name: 上传诊断快照
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() && failure() }}
+      with:
+        name: config-debug-${{ matrix.proxy }}${{ env.FILE_DATE }}
+        path: |
+          openwrt/.config
+          openwrt/tmp/.config-package.in
+          openwrt/tmp/.packageinfo
+        retention-days: 14
