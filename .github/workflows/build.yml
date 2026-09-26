@@ -189,6 +189,12 @@ jobs:
     - name: 生成配置并预下载
       run: |
         cd openwrt
+        # 关键修复（run 36228468632 破案）：prepare-tmpinfo 用「-nt」判断是否重建
+        # tmp/.config-package.in——若它比 tmp/.packageinfo 新则跳过重建。而
+        # diy-part2 是在 feeds install 之后才把 luci-app-eqos 拷入 feed 的，
+        # 旧 Kconfig 里没有该符号，conf --defconfig 会把 x86.config 的 =y
+        # 当未知符号静默丢弃。此处强制删除元数据缓存，全量重扫。
+        rm -f tmp/.packageinfo tmp/.config-package.in tmp/.config-target.in
         make defconfig
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
