@@ -189,13 +189,21 @@ jobs:
     - name: 生成配置并预下载
       run: |
         cd openwrt
-        # 关键修复（run 36228468632 破案）：prepare-tmpinfo 用「-nt」判断是否重建
-        # tmp/.config-package.in——若它比 tmp/.packageinfo 新则跳过重建。而
-        # diy-part2 是在 feeds install 之后才把 luci-app-eqos 拷入 feed 的，
-        # 旧 Kconfig 里没有该符号，conf --defconfig 会把 x86.config 的 =y
-        # 当未知符号静默丢弃。此处强制删除元数据缓存，全量重扫。
-        rm -f tmp/.packageinfo tmp/.config-package.in tmp/.config-target.in
+        # 关键修复（run 36228468632/36229726317 两轮破案）：包元数据多层缓存
+        # （tmp/info/ 的文件清单+md5 印章、tmp/.packageinfo、tmp/.config-*.in）
+        # 在 diy-part2 事后拷入 eqos / 打 daed 补丁后不可靠，导致主 defconfig
+        # 用的 Kconfig 缺 eqos 符号、daed 缺 NEED_BPF_TOOLCHAIN select，
+        # conf 把对应 =y 静默丢弃。此处全量删除强制完整重扫。
+        rm -rf tmp/info tmp/.packageinfo tmp/.config-package.in tmp/.config-target.in
         make defconfig
+        # ---- 现场检查：此刻的 Kconfig/packageinfo 必须包含 eqos 与 daed 补丁 ----
+        echo "===== step12 defconfig 后现场检查 ====="
+        grep -q "config PACKAGE_luci-app-eqos" tmp/.config-package.in \
+          && echo "✓ Kconfig 含 eqos 符号" || echo "✗✗ Kconfig 缺 eqos 符号（扫描层仍陈旧！）"
+        grep -q "NEED_BPF_TOOLCHAIN" tmp/.packageinfo \
+          && echo "✓ packageinfo 含 daed BPF 补丁" || echo "✗✗ packageinfo 缺 NEED_BPF_TOOLCHAIN（daed 未重扫！）"
+        grep -q "^CONFIG_PACKAGE_luci-app-eqos=y" .config \
+          && echo "✓ .config 已选中 eqos" || echo "✗✗ .config 未选中 eqos"
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
@@ -312,32 +320,20 @@ jobs:
         echo "--- .config-package.in 概况 ---"
         wc -l tmp/.config-package.in
         grep -c "^config PACKAGE_" tmp/.config-package.in || true
-        # ---------- 8.9 输入侧二分定位：找出 x86.config 里哪一行让 conf 丢 eqos ----------
-        # confdata.c conf_read(): 若符号 visible==no 且 conf_unsaved==0，用户值被静默清除。
-        # 用受控 conf 重放，逐组改输入，看哪一组让 eqos 存活。
-        echo "===== 8.9 输入侧二分定位 ====="
+        # ---------- 8.9 输入侧 sanity（注意：--fatalrecursive 会让 conf 在递归依赖时
+        # 不写 .config 直接 exit 1，probe 必须用无 fatal 模式；run10 教训）----------
+        echo "===== 8.9 输入侧 sanity（无 fatal 模式）====="
         CONF=scripts/config/conf
-        IN_FULL=$(mktemp /tmp/in_full.XXXX)
+        IN_FULL=$(mktemp /tmp/in_full.XXXXXX)
         cat "$GITHUB_WORKSPACE/$CONFIG_FILE" "$GITHUB_WORKSPACE/proxy-${{ matrix.proxy }}.config" > "$IN_FULL"
-        probe() { # $1=标签 $2=输入文件 [$3=附加 conf 参数]
-          cp "$2" .config
-          set +e
-          $CONF $3 --defconfig=.config Config.in >/tmp/probe.log 2>&1
-          RC=$?
-          set -e
-          if grep -q "^CONFIG_PACKAGE_luci-app-eqos=y$" .config; then st="eqos=Y 存活"; else st="eqos=被丢弃"; fi
-          echo "  PROBE[$1]: $st (conf exit=$RC)"
-          grep -iE "recursive|error|warning" /tmp/probe.log | sort -u | head -4 | sed 's/^/      /' || true
-        }
-        probe "A-完整输入+fatal(预期复现)" "$IN_FULL" "--fatalrecursive"
-        probe "A2-完整输入无fatal" "$IN_FULL" ""
-        grep -v "^CONFIG_PACKAGE_tc=y$" "$IN_FULL" > /tmp/in_b;      probe "B-去掉tc=y" /tmp/in_b "--fatalrecursive"
-        sed "s|^CONFIG_PACKAGE_tc=y$|CONFIG_PACKAGE_tc-tiny=y|" "$IN_FULL" > /tmp/in_c; probe "C-tc换成tc-tiny" /tmp/in_c "--fatalrecursive"
-        grep -v "mihomo" "$IN_FULL" > /tmp/in_d;                     probe "D-去掉mihomo行" /tmp/in_d "--fatalrecursive"
-        grep -v "kmod-sched" "$IN_FULL" > /tmp/in_e;                 probe "E-去掉kmod-sched行" /tmp/in_e "--fatalrecursive"
-        # 恢复主流程状态
         cp "$IN_FULL" .config
-        $CONF --fatalrecursive --defconfig=.config Config.in >/dev/null 2>&1 || true
+        set +e
+        $CONF --defconfig=.config Config.in >/tmp/probe.log 2>&1
+        RC=$?
+        set -e
+        if grep -q "^CONFIG_PACKAGE_luci-app-eqos=y$" .config; then st="eqos=Y 存活"; else st="eqos=被丢弃"; fi
+        echo "  PROBE[完整输入,conf exit=$RC]: $st"
+        grep -iE "recursive|error" /tmp/probe.log | sort -u | head -3 | sed 's/^/      /' || true
         FAILED=0
         # 代理后端
         grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }
