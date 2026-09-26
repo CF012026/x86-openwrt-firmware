@@ -95,7 +95,7 @@ jobs:
     - name: 安装 feeds 软件包
       run: |
         cd openwrt
-        # 官方源：全量
+        # 官方源（已由 diy-part1.sh 换成 jjm2473 fork）：全量
         ./scripts/feeds install -a -p packages
         ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a -p routing
@@ -111,14 +111,31 @@ jobs:
         # lucky / easytier：只装本体 + LuCI 界面 + 中文包
         ./scripts/feeds install lucky luci-app-lucky luci-i18n-lucky-zh-cn
         ./scripts/feeds install easytier luci-app-easytier luci-i18n-easytier-zh-cn
-        # iStore 全家桶（linkease 官方推荐集成方式）
+        # iStore 全家桶（linkease 官方推荐集成方式；lua 生态由 jjm2473 fork 提供）
         ./scripts/feeds install -d y -p istore luci-app-store
         ./scripts/feeds install -p nas_luci luci-app-quickstart luci-app-istorex \
           luci-app-linkease luci-app-ddnsto luci-app-diskman luci-app-unishare luci-nginxer
+        # Nikki（feed 自带 mihomo-meta 内核，PROVIDES:=mihomo）
+        ./scripts/feeds install -p nikki nikki luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta
+        # PassWall（官方双 feed）
+        # 核心 xray-core/sing-box/chinadns-ng 在 packages feed 也有旧版，
+        # 沿用 daed 教训：先 uninstall 再从 passwall_packages 强装（-f 对已装包是 no-op）
+        ./scripts/feeds install -p passwall_luci luci-app-passwall luci-i18n-passwall-zh-cn
+        for p in xray-core sing-box chinadns-ng geoview; do
+          ./scripts/feeds uninstall $p 2>/dev/null || true
+          ./scripts/feeds install -p passwall_packages $p
+        done
         # Docker
         ./scripts/feeds install dockerd docker docker-compose luci-app-dockerman
+        echo "===== 关键第三方包注册断言 ====="
+        for p in nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box chinadns-ng geoview \
+                 luci-app-store luci-app-quickstart luci-app-istorex; do
+          found=$(ls -d package/feeds/*/$p 2>/dev/null | head -1)
+          [ -n "$found" ] || { echo "::error::$p 未在任何 feed 中注册！"; exit 1; }
+          echo "✓ $p -> $found"
+        done
         echo "===== 各第三方 feed 实际注册的包 ====="
-        for f in small lucky easytier istore nas nas_luci; do
+        for f in small lucky easytier istore nas nas_luci nikki passwall_packages passwall_luci; do
           echo "--- $f ---"; ls package/feeds/$f/ 2>/dev/null | head -30 || echo "（无）"
         done
 
@@ -210,6 +227,8 @@ jobs:
         print("===== iStore 链路依赖诊断 =====")
         for p in ['luci-app-istorex', 'luci-app-quickstart', 'quickstart',
                   'luci-app-store', 'luci-lib-taskd', 'taskd', 'luci-lib-xterm',
+                  'luci-lua-runtime', 'lua', 'liblucihttp-lua', 'liblucihttp',
+                  'luci-lib-nixio', 'ucode-mod-lua', 'libubus-lua', 'luci-base',
                   'mount-utils', 'script-utils', 'mdadm', 'coreutils-stty',
                   'shadow-utils', 'shadow-useradd', 'lsblk', 'block-mount',
                   'e2fsprogs', 'parted', 'smartd', 'smartmontools-drivedb',
@@ -238,11 +257,14 @@ jobs:
         for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
                    luci-theme-argon luci-app-argon-config \
                    dockerd docker docker-compose luci-app-dockerman \
-                   luci-app-store luci-app-quickstart luci-app-istorex; do
+                   luci-app-store luci-app-quickstart luci-app-istorex \
+                   nikki luci-app-nikki mihomo-meta \
+                   luci-app-passwall xray-core sing-box chinadns-ng; do
           grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || { echo "::error::${pkg} 未被选中！"; FAILED=1; }
         done
         # 瘦身黑名单：这些包不允许出现在 .config（=m 也不行）
-        for pkg in mihomo clashoo luci-app-clashoo nikki luci-app-nikki momo luci-app-momo luci-app-fchomo; do
+        # 注意：mihomo 是 mihomo-meta 的虚拟 PROVIDES 符号，不查；查真实内核包名
+        for pkg in mihomo-alpha clashoo luci-app-clashoo momo luci-app-momo luci-app-fchomo; do
           grep -qE "^CONFIG_PACKAGE_${pkg}=[ym]" .config && { echo "::error::瘦身失败：${pkg} 被拉进了编译配置！"; FAILED=1; }
         done
         # 软件空间校验
@@ -278,19 +300,21 @@ jobs:
         cd openwrt/bin/targets/x86/64
         MANIFEST=$(ls *.manifest | head -1)
         echo "===== $MANIFEST 关键包实际入选情况 ====="
-        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex) " "$MANIFEST" || true
+        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng) " "$MANIFEST" || true
         FAILED=0
         # 核心 app 终检
         for pkg in daed lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
                    luci-theme-argon dockerd docker docker-compose luci-app-dockerman \
-                   luci-app-store luci-app-quickstart luci-app-istorex; do
+                   luci-app-store luci-app-quickstart luci-app-istorex \
+                   nikki luci-app-nikki mihomo-meta \
+                   luci-app-passwall xray-core sing-box chinadns-ng; do
           grep -q "^${pkg} " "$MANIFEST" || { echo "::error::manifest 中没有 ${pkg}！"; FAILED=1; }
         done
         # daed 版本终检：必须是 small feed 的日期版快照，不许被 packages feed 抢占
         grep -E "^daed - " "$MANIFEST" | grep -qE "^daed - 20[0-9]{2}\." \
           || { echo "::error::daed 版本异常：$(grep '^daed ' $MANIFEST)（预期 small feed 快照）"; FAILED=1; }
-        # 瘦身黑名单终检
-        for pkg in mihomo clashoo luci-app-clashoo nikki luci-app-nikki momo luci-app-momo luci-app-fchomo luci-app-daede luci-i18n-daede-zh-cn; do
+        # 瘦身黑名单终检（mihomo 为 mihomo-meta 虚拟 PROVIDES，不查真实名）
+        for pkg in mihomo-alpha clashoo luci-app-clashoo momo luci-app-momo luci-app-fchomo luci-app-daede luci-i18n-daede-zh-cn; do
           grep -qE "^${pkg} " "$MANIFEST" && { echo "::error::瘦身失败：${pkg} 混进了最终镜像！"; FAILED=1; }
         done
         [ "$FAILED" -eq 0 ] || exit 1
