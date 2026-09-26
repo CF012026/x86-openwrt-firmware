@@ -279,16 +279,16 @@ jobs:
         #   buildonly/ignore/category）；② 条目在但 depends 不可满足/不可见（kconfig 层）。
         # 看条目数即可分辨，看完整定义即可定位是谁的依赖断了。
         echo "===== 8.8 Kconfig 数据源诊断 ====="
-        echo "--- tmp/.config-package.in 条目计数（注意条目是 tab 缩进的）---"
+        echo "--- tmp/.config-package.in 条目计数（注意条目可能是 tab 缩进的 config/menuconfig）---"
         for p in luci-app-store luci-app-quickstart luci-app-istorex tar libcrypt-compat \
-                 luci-app-eqos luci-app-passwall nikki curl quickstart luci-base; do
-          kc=$(grep -cE "^[[:space:]]*config PACKAGE_${p}\$" tmp/.config-package.in 2>/dev/null || true)
+                 luci-app-eqos luci-app-passwall nikki curl quickstart luci-base xz-utils xz; do
+          kc=$(grep -cE "^[[:space:]]*(menu)?config PACKAGE_${p}\$" tmp/.config-package.in 2>/dev/null || true)
           echo "  PACKAGE_${p}: 条目数=${kc:-0}"
         done
         echo "--- 丢失包 vs 幸存包 完整 Kconfig 定义（含前 3 行菜单上下文）---"
-        for p in tar luci-app-store luci-app-eqos libcrypt-compat luci-app-passwall; do
+        for p in tar luci-app-store luci-app-eqos luci-app-passwall; do
           echo "[$p]"
-          grep -B3 -A20 -E "^[[:space:]]*config PACKAGE_${p}\$" tmp/.config-package.in | head -30 || echo "  （.config-package.in 无此条目！）"
+          grep -B3 -A20 -E "^[[:space:]]*(menu)?config PACKAGE_${p}\$" tmp/.config-package.in | head -30 || echo "  （.config-package.in 无此条目！）"
         done
         echo "--- 重放 defconfig 抓 conf 的 undefined symbol 告警 ---"
         cp /tmp/config.bak .config
@@ -326,6 +326,7 @@ jobs:
         for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
                    luci-theme-argon luci-app-argon-config \
                    dockerd docker docker-compose luci-app-dockerman \
+                   xz-utils \
                    luci-app-store luci-app-quickstart luci-app-istorex \
                    nikki luci-app-nikki mihomo-meta \
                    luci-app-passwall xray-core sing-box chinadns-ng; do
