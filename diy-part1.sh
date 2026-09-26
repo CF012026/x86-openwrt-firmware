@@ -47,10 +47,13 @@ echo 'src-git nas_luci https://github.com/linkease/nas-packages-luci.git;main' >
 echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
 
 # 8) PassWall 双 feed（官方推荐姿势）
+#    2026-09-26：xiaorouji 已把仓库迁到 Openwrt-Passwall 组织
+#    （xiaorouji/openwrt-passwall 已删除无重定向 → clone 直接失败，
+#    run 36218684133 实锤；packages 旧地址有重定向仍可用，但统一切新）
 #    passwall_packages -> xray-core / sing-box / chinadns-ng / geoview 等核心
 #    passwall_luci     -> luci-app-passwall 界面
-echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main' >> feeds.conf.default
-echo 'src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' >> feeds.conf.default
+echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
+echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
 
 echo "===== 当前 feeds.conf.default ====="
 cat feeds.conf.default
