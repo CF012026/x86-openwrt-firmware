@@ -209,8 +209,11 @@ fi  # Go_VALUES_MK 1.26+ 检测分支结束
 # ---------- eqos：jjm2473 luci fork 剪掉了 luci-app-eqos，从官方 luci 25.12 补回 ----------
 # run 36220035542 实锤：jjm2473/luci istoreos-25.12 无 applications/luci-app-eqos，
 # 官方 immortalwrt/luci openwrt-25.12 有（依赖 +tc +kmod-sched-core +kmod-ifb 全是基础包）。
-# 做法：把 app 目录拷进 feeds/luci（luci.mk 的 ../../include 相对路径在 feed 树内自洽），
-# 再重新 feeds install 注册。
+# 做法：把 app 目录拷进 feeds/luci（luci.mk 的 ../../include 相对路径在 feed 树内自洽）。
+#
+# run 36221464928 实锤（关键坑）：feeds install 只读缓存索引 feeds/luci.index
+# （scripts/feeds 第 279 行），索引由 update 时生成。事后拷入新包，install 根本看不见，
+# 静默失败。必须先 `feeds update -i luci` 重建索引（仅重扫 feed 目录，不拉仓库）再 install。
 if [ ! -e feeds/luci/applications/luci-app-eqos ]; then
     echo "== 补回 luci-app-eqos（官方 luci 25.12 -> jjm2473 fork）=="
     rm -rf /tmp/luci-official
@@ -218,10 +221,14 @@ if [ ! -e feeds/luci/applications/luci-app-eqos ]; then
         || { echo "::error::克隆官方 luci 失败"; exit 1; }
     cp -r /tmp/luci-official/applications/luci-app-eqos feeds/luci/applications/ \
         || { echo "::error::拷贝 luci-app-eqos 失败"; exit 1; }
-    ./scripts/feeds install -p luci luci-app-eqos luci-i18n-eqos-zh-cn 2>/dev/null \
-        || ./scripts/feeds install -p luci luci-app-eqos
+    # 关键：重建 luci feed 缓存索引，否则 install 查旧索引找不到新包
+    ./scripts/feeds update -i luci \
+        || { echo "::error::重建 luci feed 索引失败"; exit 1; }
+    ./scripts/feeds install -p luci luci-app-eqos
+    # i18n 包由 luci.mk 按 CONFIG_LUCI_LANG 生成，feed 索引中未必存在，装不上不算失败
+    ./scripts/feeds install -p luci luci-i18n-eqos-zh-cn || echo "WARN: luci-i18n-eqos-zh-cn 不在 feed 索引（i18n 由 CONFIG_LUCI_LANG 控制生成），继续"
     test -e package/feeds/luci/luci-app-eqos \
-        || { echo "::error::luci-app-eqos 注册失败！"; exit 1; }
+        || { echo "::error::luci-app-eqos 注册失败！"; ls feeds/luci.index; cat feeds/luci.index 2>/dev/null | grep -c eqos; exit 1; }
     echo "== ✓ luci-app-eqos 已补回并注册 =="
 fi
 
