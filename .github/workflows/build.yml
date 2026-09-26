@@ -319,18 +319,22 @@ jobs:
         CONF=scripts/config/conf
         IN_FULL=$(mktemp /tmp/in_full.XXXX)
         cat "$GITHUB_WORKSPACE/$CONFIG_FILE" "$GITHUB_WORKSPACE/proxy-${{ matrix.proxy }}.config" > "$IN_FULL"
-        probe() { # $1=标签 $2=输入文件
+        probe() { # $1=标签 $2=输入文件 [$3=附加 conf 参数]
           cp "$2" .config
-          $CONF --fatalrecursive --defconfig=.config Config.in >/tmp/probe.log 2>&1
+          set +e
+          $CONF $3 --defconfig=.config Config.in >/tmp/probe.log 2>&1
+          RC=$?
+          set -e
           if grep -q "^CONFIG_PACKAGE_luci-app-eqos=y$" .config; then st="eqos=Y 存活"; else st="eqos=被丢弃"; fi
-          echo "  PROBE[$1]: $st"
+          echo "  PROBE[$1]: $st (conf exit=$RC)"
           grep -iE "recursive|error|warning" /tmp/probe.log | sort -u | head -4 | sed 's/^/      /' || true
         }
-        probe "A-完整输入(预期复现)" "$IN_FULL"
-        grep -v "^CONFIG_PACKAGE_tc=y$" "$IN_FULL" > /tmp/in_b;      probe "B-去掉tc=y" /tmp/in_b
-        sed "s|^CONFIG_PACKAGE_tc=y$|CONFIG_PACKAGE_tc-tiny=y|" "$IN_FULL" > /tmp/in_c; probe "C-tc换成tc-tiny" /tmp/in_c
-        grep -v "mihomo" "$IN_FULL" > /tmp/in_d;                     probe "D-去掉mihomo行" /tmp/in_d
-        grep -v "kmod-sched" "$IN_FULL" > /tmp/in_e;                 probe "E-去掉kmod-sched行" /tmp/in_e
+        probe "A-完整输入+fatal(预期复现)" "$IN_FULL" "--fatalrecursive"
+        probe "A2-完整输入无fatal" "$IN_FULL" ""
+        grep -v "^CONFIG_PACKAGE_tc=y$" "$IN_FULL" > /tmp/in_b;      probe "B-去掉tc=y" /tmp/in_b "--fatalrecursive"
+        sed "s|^CONFIG_PACKAGE_tc=y$|CONFIG_PACKAGE_tc-tiny=y|" "$IN_FULL" > /tmp/in_c; probe "C-tc换成tc-tiny" /tmp/in_c "--fatalrecursive"
+        grep -v "mihomo" "$IN_FULL" > /tmp/in_d;                     probe "D-去掉mihomo行" /tmp/in_d "--fatalrecursive"
+        grep -v "kmod-sched" "$IN_FULL" > /tmp/in_e;                 probe "E-去掉kmod-sched行" /tmp/in_e "--fatalrecursive"
         # 恢复主流程状态
         cp "$IN_FULL" .config
         $CONF --fatalrecursive --defconfig=.config Config.in >/dev/null 2>&1 || true
