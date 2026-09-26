@@ -206,4 +206,23 @@ echo "== Go 工具链升级补丁自检通过" || {
 
 fi  # Go_VALUES_MK 1.26+ 检测分支结束
 
+# ---------- eqos：jjm2473 luci fork 剪掉了 luci-app-eqos，从官方 luci 25.12 补回 ----------
+# run 36220035542 实锤：jjm2473/luci istoreos-25.12 无 applications/luci-app-eqos，
+# 官方 immortalwrt/luci openwrt-25.12 有（依赖 +tc +kmod-sched-core +kmod-ifb 全是基础包）。
+# 做法：把 app 目录拷进 feeds/luci（luci.mk 的 ../../include 相对路径在 feed 树内自洽），
+# 再重新 feeds install 注册。
+if [ ! -e feeds/luci/applications/luci-app-eqos ]; then
+    echo "== 补回 luci-app-eqos（官方 luci 25.12 -> jjm2473 fork）=="
+    rm -rf /tmp/luci-official
+    git clone -q --depth 1 -b openwrt-25.12 https://github.com/immortalwrt/luci /tmp/luci-official \
+        || { echo "::error::克隆官方 luci 失败"; exit 1; }
+    cp -r /tmp/luci-official/applications/luci-app-eqos feeds/luci/applications/ \
+        || { echo "::error::拷贝 luci-app-eqos 失败"; exit 1; }
+    ./scripts/feeds install -p luci luci-app-eqos luci-i18n-eqos-zh-cn 2>/dev/null \
+        || ./scripts/feeds install -p luci luci-app-eqos
+    test -e package/feeds/luci/luci-app-eqos \
+        || { echo "::error::luci-app-eqos 注册失败！"; exit 1; }
+    echo "== ✓ luci-app-eqos 已补回并注册 =="
+fi
+
 exit 0

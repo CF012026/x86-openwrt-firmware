@@ -127,9 +127,16 @@ jobs:
         done
         # Docker
         ./scripts/feeds install dockerd docker docker-compose luci-app-dockerman
+        # Argon 主题 + argon-config（run 36220035542 实锤：jjm2473 luci fork 和
+        # small 都没有 argon；iStoreOS 官方同款 third feed 提供）
+        ./scripts/feeds install -p third luci-theme-argon luci-app-argon-config \
+          || { echo "::error::argon 从 third feed 注册失败！"; exit 1; }
+        ./scripts/feeds install -p third luci-i18n-argon-config-zh-cn 2>/dev/null \
+          || echo "（argon-config 中文包不存在于 third，跳过）"
+        test -e package/feeds/third/luci-theme-argon || { echo "::error::luci-theme-argon 未注册！"; exit 1; }
         echo "===== 关键第三方包注册断言 ====="
         for p in nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box chinadns-ng geoview \
-                 luci-app-store luci-app-quickstart luci-app-istorex; do
+                 luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config; do
           found=$(ls -d package/feeds/*/$p 2>/dev/null | head -1)
           [ -n "$found" ] || { echo "::error::$p 未在任何 feed 中注册！"; exit 1; }
           echo "✓ $p -> $found"
@@ -237,6 +244,36 @@ jobs:
         PYEOF
         # 重新单线程扫描 packageinfo，抓 istore 三件套的解析报错
         make tmp/.packageinfo -j1 V=s 2>&1 | grep -B3 -A10 -iE "luci-app-store|luci-app-quickstart|luci-app-istorex|error" | head -80 || true
+        # ---------- 8.7 Kconfig 剪枝定位 ----------
+        # 把 iStore 全链强制 =y 再跑一次 defconfig，看谁被 Kconfig 剪掉——
+        # 被剪枝的包 = 其依赖在 Kconfig 层面不可满足（packageinfo 层面无法发现），
+        # 最靠近叶子端的被剪包就是断链根因。
+        CHAIN="luci-app-store luci-app-quickstart luci-app-istorex quickstart luci-lib-taskd taskd luci-lib-xterm luci-lua-runtime luci-lib-nixio lua liblua liblucihttp liblucihttp-lua libubus-lua ucode-mod-lua luci-lib-base luci-lib-ip luci-lib-jsonc luci-base libuci-lua mount-utils curl tar libcrypt-compat"
+        cp .config /tmp/config.bak
+        for p in $CHAIN; do
+          if grep -qE "^# CONFIG_PACKAGE_${p} is not set$" .config; then
+            sed -i "s|^# CONFIG_PACKAGE_${p} is not set\$|CONFIG_PACKAGE_${p}=y|" .config
+          elif ! grep -qE "^CONFIG_PACKAGE_${p}=[ym]$" .config; then
+            echo "PRUNE-TEST: ${p} —— Kconfig 无此符号（未注册或名字不对）"
+          fi
+        done
+        make defconfig >/dev/null 2>&1 || true
+        echo "===== 剪枝测试结果 ====="
+        PRUNED=""
+        for p in $CHAIN; do
+          if grep -qE "^CONFIG_PACKAGE_${p}=y$" .config; then st="存活=y"
+          elif grep -qE "^CONFIG_PACKAGE_${p}=m$" .config; then st="存活=m"
+          elif grep -qE "^# CONFIG_PACKAGE_${p} is not set$" .config; then st="❌被剪枝"; PRUNED="$PRUNED $p"
+          else st="❌无符号"; PRUNED="$PRUNED $p"; fi
+          echo "  $p: $st"
+        done
+        cp /tmp/config.bak .config
+        for p in $PRUNED; do
+          echo "--- 被剪枝包 $p 的依赖 ---"
+          sed -n "/^Package: ${p}\$/,/^$/p" tmp/.packageinfo | grep -E "Depends|Provides" || echo "  （packageinfo 无记录）"
+        done
+        echo "===== libc 配置 ====="
+        grep -E "^CONFIG_LIBC=|^CONFIG_USE_GLIBC|^CONFIG_USE_MUSL" .config || echo "（默认 musl）"
         FAILED=0
         # 代理后端
         grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }

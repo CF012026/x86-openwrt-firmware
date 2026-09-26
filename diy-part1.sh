@@ -55,5 +55,10 @@ echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >>
 echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
 echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
 
+# 9) jjm2473/openwrt-third —— argon 主题 + argon-config 等
+#    （run 36220035542 实锤：jjm2473 luci fork 和 kenzok8/small 都没有 argon；
+#    iStoreOS 25.12 官方 base feeds.conf.default 就是这个 third feed）
+echo 'src-git third https://github.com/jjm2473/openwrt-third.git;main' >> feeds.conf.default
+
 echo "===== 当前 feeds.conf.default ====="
 cat feeds.conf.default
