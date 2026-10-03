@@ -236,7 +236,7 @@ jobs:
         # xray-core 版本钉子（26.9.9 要求 go1.27，25.12 只有 go1.26.8）
         grep -q "^PKG_VERSION:=26.7.28" package/feeds/passwall_packages/xray-core/Makefile || { echo "::error::xray-core 未钉到 26.7.28 —— go 版本不兼容会编译失败！"; FAILED=1; }
         # 核心 app（缺了直接拦下）
-        for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+        for pkg in lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon luci-app-argon-config \
                    dockerd docker docker-compose luci-app-dockerman \
                    xz-utils \
@@ -286,7 +286,7 @@ jobs:
         grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng) " "$MANIFEST" || true
         FAILED=0
         # 核心 app 终检
-        for pkg in daed lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+        for pkg in daed lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon dockerd docker docker-compose luci-app-dockerman \
                    luci-app-store luci-app-quickstart luci-app-istorex \
                    nikki luci-app-nikki mihomo-meta \

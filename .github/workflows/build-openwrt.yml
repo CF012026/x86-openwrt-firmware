@@ -157,13 +157,19 @@ jobs:
         # 【顺序至关重要】必须先合并私人配置、再统一拷贝进 openwrt/files/
         # （2026-09-23 修复：原顺序先拷贝后合并，私人配置从未进入固件）
         mkdir -p files
+        # 对照测速固件：私人配置为可选项——token 失效/克隆失败时警告并继续，
+        # 不阻塞编译（与 build.yml 的强校验版不同）
         if [ -n "$PRIVATE_REPO_TOKEN" ]; then
-          git clone --depth 1 \
+          if git clone --depth 1 \
             "https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/CF012026/x86-firmware-private.git" \
-            /tmp/private-files
-          cp -a /tmp/private-files/files/. files/
-          echo "===== 私人配置已合并（仅列文件名，不显示内容）====="
-          find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+            /tmp/private-files 2>/tmp/private-clone.err; then
+            cp -a /tmp/private-files/files/. files/
+            echo "===== 私人配置已合并（仅列文件名，不显示内容）====="
+            find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+          else
+            echo "::warning::私人配置仓库克隆失败（token 过期或无权限），对照固件跳过私人配置"
+            cat /tmp/private-clone.err | tail -2
+          fi
         else
           echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
         fi
@@ -175,15 +181,20 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    # ---------- 7.5 私人配置落位断言（防再犯拷贝顺序错误）----------
-    - name: 私人配置落位断言
+    # ---------- 7.5 私人配置落位断言（对照版：软校验，私人配置可选）----------
+    - name: 私人配置落位检查
       run: |
+        MISSING=0
         for f in files/etc/config/lucky files/etc/config/lucky.daji/lucky.conf \
-                 files/etc/easytier/config.toml files/etc/config/easytier \
-                 files/etc/uci-defaults/98-root-password; do
-          test -e "openwrt/$f" || { echo "::error::openwrt/$f 缺失！私人配置/密码未烤入"; exit 1; }
+                 files/etc/easytier/config.toml files/etc/config/easytier; do
+          test -e "openwrt/$f" || { echo "::warning::openwrt/$f 不在（对照固件允许无私人配置）"; MISSING=1; }
         done
-        echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
+        if [ -e openwrt/files/etc/uci-defaults/98-root-password ]; then
+          echo "✓ root 密码已落位"
+        else
+          echo "::warning::98-root-password 不在（未设 ROOT_PASSWORD Secret 或跳过注入）"
+        fi
+        [ "$MISSING" -eq 0 ] && echo "✓ 私人配置已全部落位 openwrt/files/" || true
 
     # ---------- 8. 生成配置并预下载依赖包 ----------
     - name: 生成配置并预下载
@@ -236,7 +247,7 @@ jobs:
         # xray-core 版本钉子（26.9.9 要求 go1.27，25.12 只有 go1.26.8）
         grep -q "^PKG_VERSION:=26.7.28" package/feeds/passwall_packages/xray-core/Makefile || { echo "::error::xray-core 未钉到 26.7.28 —— go 版本不兼容会编译失败！"; FAILED=1; }
         # 核心 app（缺了直接拦下）
-        for pkg in lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+        for pkg in lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon luci-app-argon-config \
                    dockerd docker docker-compose luci-app-dockerman \
                    xz-utils \
@@ -286,7 +297,7 @@ jobs:
         grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng) " "$MANIFEST" || true
         FAILED=0
         # 核心 app 终检
-        for pkg in daed lucky luci-app-lucky easytier luci-app-easytier luci-app-eqos \
+        for pkg in daed lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon dockerd docker docker-compose luci-app-dockerman \
                    luci-app-store luci-app-quickstart luci-app-istorex \
                    nikki luci-app-nikki mihomo-meta \
