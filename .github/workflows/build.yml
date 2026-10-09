@@ -126,7 +126,10 @@ jobs:
           ./scripts/feeds install -p passwall_packages $p
         done
         # Docker
-        ./scripts/feeds install dockerd docker docker-compose luci-app-dockerman
+        ./scripts/feeds install dockerd docker docker-compose
+        # Docker 管理插件换 iStoreOS 同款 luci-app-dockermanager（LinkEase 中文 UI）
+        ./scripts/feeds install -p nas_luci luci-app-dockermanager luci-lib-linkeaseauth
+        ./scripts/feeds install -p nas dockermanager linkease-app-entry
         # Argon 主题 + argon-config（run 36220035542 实锤：jjm2473 luci fork 和
         # small 都没有 argon；iStoreOS 官方同款 third feed 提供）
         ./scripts/feeds install -p third luci-theme-argon luci-app-argon-config \
@@ -136,7 +139,8 @@ jobs:
         test -e package/feeds/third/luci-theme-argon || { echo "::error::luci-theme-argon 未注册！"; exit 1; }
         echo "===== 关键第三方包注册断言 ====="
         for p in nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box chinadns-ng geoview \
-                 luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config; do
+                 luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config \
+                 dockermanager luci-app-dockermanager linkease-app-entry luci-lib-linkeaseauth; do
           found=$(ls -d package/feeds/*/$p 2>/dev/null | head -1)
           [ -n "$found" ] || { echo "::error::$p 未在任何 feed 中注册！"; exit 1; }
           echo "✓ $p -> $found"
@@ -212,7 +216,7 @@ jobs:
       run: |
         cd openwrt
         echo "===== 关键包入选情况 ====="
-        grep -E "^CONFIG_PACKAGE_(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex)=" .config || true
+        grep -E "^CONFIG_PACKAGE_(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockermanager|luci-app-store|luci-app-quickstart|luci-app-istorex|luci-i18n-base-zh-cn)=" .config || true
         FAILED=0
         # 代理后端
         grep -q "^CONFIG_PACKAGE_daed=y" .config || { echo "::error::daed 未被选中（多半是 BTF/XDP 依赖不满足）"; FAILED=1; }
@@ -238,7 +242,7 @@ jobs:
         # 核心 app（缺了直接拦下）
         for pkg in lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon luci-app-argon-config \
-                   dockerd docker docker-compose luci-app-dockerman \
+                   dockerd docker docker-compose luci-app-dockermanager \
                    xz-utils \
                    luci-app-store luci-app-quickstart luci-app-istorex \
                    nikki luci-app-nikki mihomo-meta \
@@ -283,11 +287,11 @@ jobs:
         cd openwrt/bin/targets/x86/64
         MANIFEST=$(ls *.manifest | head -1)
         echo "===== $MANIFEST 关键包实际入选情况 ====="
-        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockerman|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng) " "$MANIFEST" || true
+        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockermanager|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng|luci-i18n-base-zh-cn) " "$MANIFEST" || true
         FAILED=0
         # 核心 app 终检
         for pkg in daed lucky luci-app-lucky easytier luci-app-easytier \
-                   luci-theme-argon dockerd docker docker-compose luci-app-dockerman \
+                   luci-theme-argon dockerd docker docker-compose luci-app-dockermanager \
                    luci-app-store luci-app-quickstart luci-app-istorex \
                    nikki luci-app-nikki mihomo-meta \
                    luci-app-passwall xray-core sing-box chinadns-ng; do
