@@ -8,6 +8,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 # ==================== 环境变量 ====================
 env:
   REPO_URL: https://github.com/openwrt/openwrt
@@ -337,6 +340,20 @@ jobs:
         name: X86-64-openwrt-${{ matrix.proxy }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
         retention-days: 30
+
+    # ---------- 13. 发布到 Releases（公开直链、永久保留）----------
+    - name: 发布到 Releases
+      if: ${{ success() }}
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: openwrt-x86-${{ matrix.proxy }}-${{ env.FILE_DATE }}
+        name: X86-64 OpenWrt ${{ matrix.proxy }} ${{ env.FILE_DATE }}
+        files: |
+          ${{ env.FIRMWARE }}/*combined-efi*.img.gz
+        body: |
+          X86_64 OpenWrt 官方底座固件
+          - combined-efi img.gz: 写盘/直刷镜像（Etcher 直接写 .img.gz，无需解压）
+          内置: daed / iStore 全家桶 / luci-app-dockermanager / nikki / passwall / lucky / easytier / 中文语言包
 
     # ---------- 13. 失败时上传配置诊断快照 ----------
     - name: 上传诊断快照
