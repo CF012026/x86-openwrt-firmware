@@ -85,13 +85,16 @@ jobs:
         # 钉内核到 6.12.108（10/3 基线版本）
         # 背景：上游 10/5 把 openwrt-25.12 内核 bump 到 6.12.112，10/9 编译的
         # 6.112 固件实测国内直连吞吐从 1300+ 掉到 600；回退 108 对照。
-        # hash 取自上游 bump commit 7722054025（kernel: bump 6.12 to 6.12.108）
-        cat > openwrt/target/linux/generic/kernel-6.12 << 'KERNELPIN'
-        LINUX_VERSION-6.12 = .108
-        LINUX_KERNEL_HASH-6.12.108 = e1d1ea200d22d55c9f5d5fae59e69bb3b494515705fc3390cd54231ee4f4baaf
-        KERNELPIN
+        # 注意：不能只覆写 kernel-6.12 版本文件 —— 上游 backport-6.12 补丁是
+        # 按 .112 维护的，在 .108 树上打不上（run 38014210302 实锤：
+        # 720-01-v6.13-net-phy-mediatek patch failed → kernel-headers 编译失败）。
+        # 正确做法：从 bump-to-108 提交 7722054025 checkout 整个 generic 目录，
+        # 版本文件与补丁集保持原子一致。
+        git -C openwrt fetch --depth=1 origin 7722054025462cbc4cc6225cfe49ea0ad409b302
+        git -C openwrt checkout FETCH_HEAD -- target/linux/generic
         echo "===== 内核版本钉版结果 ====="
-        cat openwrt/target/linux/generic/kernel-6.12
+        grep "LINUX_VERSION-6.12" openwrt/target/linux/generic/kernel-6.12
+        echo "===== generic 补丁集已随 7722054025 回退 ====="
 
     # ---------- 5. 追加第三方软件源 ----------
     - name: 加载自定义 feeds
