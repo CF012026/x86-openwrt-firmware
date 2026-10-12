@@ -118,16 +118,8 @@ jobs:
         ./scripts/feeds install -d y -p istore luci-app-store
         ./scripts/feeds install -p nas_luci luci-app-quickstart luci-app-istorex \
           luci-app-linkease luci-app-ddnsto luci-app-diskman luci-app-unishare luci-nginxer
-        # Nikki（feed 自带 mihomo-meta 内核，PROVIDES:=mihomo）
-        ./scripts/feeds install -p nikki nikki luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta
-        # PassWall（官方双 feed）
-        # 核心 xray-core/sing-box/chinadns-ng 在 packages feed 也有旧版，
-        # 沿用 daed 教训：先 uninstall 再从 passwall_packages 强装（-f 对已装包是 no-op）
-        ./scripts/feeds install -p passwall_luci luci-app-passwall luci-i18n-passwall-zh-cn
-        for p in xray-core sing-box chinadns-ng geoview; do
-          ./scripts/feeds uninstall $p 2>/dev/null || true
-          ./scripts/feeds install -p passwall_packages $p
-        done
+        # Nikki / PassWall：2026-10-10 起已从本固件移除（只用 daed 做代理后端）。
+        # 对应 feed 源已在 diy-part1.sh 里停用，这里也不再 install。
         # Docker
         ./scripts/feeds install dockerd docker docker-compose
         # Docker 管理插件换 iStoreOS 同款 luci-app-dockermanager（LinkEase 中文 UI）
@@ -141,15 +133,14 @@ jobs:
           || echo "（argon-config 中文包不存在于 third，跳过）"
         test -e package/feeds/third/luci-theme-argon || { echo "::error::luci-theme-argon 未注册！"; exit 1; }
         echo "===== 关键第三方包注册断言 ====="
-        for p in nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box chinadns-ng geoview \
-                 luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config \
+        for p in luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config \
                  dockermanager luci-app-dockermanager linkease-app-entry luci-lib-linkeaseauth; do
           found=$(ls -d package/feeds/*/$p 2>/dev/null | head -1)
           [ -n "$found" ] || { echo "::error::$p 未在任何 feed 中注册！"; exit 1; }
           echo "✓ $p -> $found"
         done
         echo "===== 各第三方 feed 实际注册的包 ====="
-        for f in small lucky easytier istore nas nas_luci nikki passwall_packages passwall_luci; do
+        for f in small lucky easytier istore nas nas_luci; do
           echo "--- $f ---"; ls package/feeds/$f/ 2>/dev/null | head -30 || echo "（无）"
         done
 
@@ -240,17 +231,20 @@ jobs:
         # run 36233262099 实锤：不开 BTF 时 daed 落到 vmlinux-btf 包分支（25.12 无此包）→ WARNING
         grep -q "^CONFIG_KERNEL_DEBUG_INFO_BTF=y" .config || { echo "::error::KERNEL_DEBUG_INFO_BTF 未生效 —— daed 运行期 eBPF 将不可用！"; FAILED=1; }
         grep -q "^CONFIG_DAED_USE_KERNEL_BTF=y" .config || { echo "::error::DAED_USE_KERNEL_BTF 未生效 —— daed BTF 源 choice 异常！"; FAILED=1; }
-        # xray-core 版本钉子（26.9.9 要求 go1.27，25.12 只有 go1.26.8）
-        grep -q "^PKG_VERSION:=26.7.28" package/feeds/passwall_packages/xray-core/Makefile || { echo "::error::xray-core 未钉到 26.7.28 —— go 版本不兼容会编译失败！"; FAILED=1; }
+        # xray-core 已随 PassWall 一并移除（原 26.7.28/go1.26 钉版不再需要，
+        # 且 feed 源已停用，Makefile 不存在，断言会误杀 —— 故整段删除）
         # 核心 app（缺了直接拦下）
         for pkg in lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon luci-app-argon-config \
                    dockerd docker docker-compose luci-app-dockermanager \
                    xz-utils \
-                   luci-app-store luci-app-quickstart luci-app-istorex \
-                   nikki luci-app-nikki mihomo-meta \
-                   luci-app-passwall xray-core sing-box chinadns-ng; do
+                   luci-app-store luci-app-quickstart luci-app-istorex; do
           grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || { echo "::error::${pkg} 未被选中！"; FAILED=1; }
+        done
+        # 已移除的代理插件反向断言：这些包绝不能出现在 .config（防依赖连带拉回）
+        for pkg in nikki luci-app-nikki mihomo-meta luci-app-passwall \
+                   xray-core sing-box chinadns-ng geoview; do
+          grep -qE "^CONFIG_PACKAGE_${pkg}=[ym]" .config && { echo "::error::已移除的 ${pkg} 仍被拉进配置！"; FAILED=1; }
         done
         # 瘦身黑名单：这些包不允许出现在 .config（=m 也不行）
         # 注意：mihomo 是 mihomo-meta 的虚拟 PROVIDES 符号，不查；查真实内核包名
@@ -290,15 +284,19 @@ jobs:
         cd openwrt/bin/targets/x86/64
         MANIFEST=$(ls *.manifest | head -1)
         echo "===== $MANIFEST 关键包实际入选情况 ====="
-        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockermanager|luci-app-store|luci-app-quickstart|luci-app-istorex|nikki|luci-app-nikki|mihomo-meta|luci-app-passwall|xray-core|sing-box|chinadns-ng|luci-i18n-base-zh-cn) " "$MANIFEST" || true
+        grep -E "^(daed|lucky|easytier|dockerd|docker|docker-compose|luci-app-dockermanager|luci-app-store|luci-app-quickstart|luci-app-istorex|luci-i18n-base-zh-cn) " "$MANIFEST" || true
         FAILED=0
         # 核心 app 终检
         for pkg in daed lucky luci-app-lucky easytier luci-app-easytier \
                    luci-theme-argon dockerd docker docker-compose luci-app-dockermanager \
                    luci-app-store luci-app-quickstart luci-app-istorex \
-                   nikki luci-app-nikki mihomo-meta \
-                   luci-app-passwall xray-core sing-box chinadns-ng; do
+                   luci-i18n-base-zh-cn; do
           grep -q "^${pkg} " "$MANIFEST" || { echo "::error::manifest 中没有 ${pkg}！"; FAILED=1; }
+        done
+        # 已移除的代理插件反向终检：绝不能混进最终镜像
+        for pkg in nikki luci-app-nikki mihomo-meta luci-app-passwall \
+                   xray-core sing-box chinadns-ng geoview; do
+          grep -q "^${pkg} " "$MANIFEST" && { echo "::error::已移除的 ${pkg} 混进了最终镜像！"; FAILED=1; }
         done
         # daed 版本终检：必须是 small feed 的日期版快照，不许被 packages feed 抢占
         grep -E "^daed - " "$MANIFEST" | grep -qE "^daed - 20[0-9]{2}\." \
@@ -342,7 +340,7 @@ jobs:
         body: |
           X86_64 ImmortalWrt 固件
           - combined-efi img.gz: 写盘/直刷镜像（Etcher 直接写 .img.gz，无需解压）
-          内置: daed / iStore 全家桶 / luci-app-dockermanager / nikki / passwall / lucky / easytier / 中文语言包
+          内置: daed / iStore 全家桶 / luci-app-dockermanager / lucky / easytier / argon / 中文语言包
 
     # ---------- 13. 失败时上传配置诊断快照 ----------
     - name: 上传诊断快照
