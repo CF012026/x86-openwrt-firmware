@@ -43,17 +43,14 @@ echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.defa
 echo 'src-git nas https://github.com/linkease/nas-packages.git;master' >> feeds.conf.default
 echo 'src-git nas_luci https://github.com/linkease/nas-packages-luci.git;main' >> feeds.conf.default
 
-# 7) Nikki —— mihomo 内核透明代理（feed 自带 mihomo-alpha/mihomo-meta 内核包）
-echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
-
-# 8) PassWall 双 feed（官方推荐姿势）
-#    2026-09-26：xiaorouji 已把仓库迁到 Openwrt-Passwall 组织
-#    （xiaorouji/openwrt-passwall 已删除无重定向 → clone 直接失败，
-#    run 36218684133 实锤；packages 旧地址有重定向仍可用，但统一切新）
-#    passwall_packages -> xray-core / sing-box / chinadns-ng / geoview 等核心
-#    passwall_luci     -> luci-app-passwall 界面
-echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
-echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
+# 7) Nikki / 8) PassWall —— 2026-10-10 起已从本固件移除（只用 daed 做代理后端）
+#    三个 feed 源（nikki / passwall_packages / passwall_luci）不再注册：
+#    既省掉两次 clone，也从源头杜绝 nikki / mihomo-meta / passwall /
+#    xray-core / sing-box / chinadns-ng / geoview 被任何依赖链连带拉回。
+#    （历史背景：2026-09-26 xiaorouji 已把仓库迁到 Openwrt-Passwall 组织）
+# echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
+# echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
+# echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
 
 # 9) jjm2473/openwrt-third —— argon 主题 + argon-config 等
 #    （run 36220035542 实锤：jjm2473 luci fork 和 kenzok8/small 都没有 argon；
