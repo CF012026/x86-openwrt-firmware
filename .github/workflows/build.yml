@@ -155,13 +155,20 @@ jobs:
         # 【顺序至关重要】必须先合并私人配置、再统一拷贝进 openwrt/files/
         # （2026-09-23 修复：原顺序先拷贝后合并，私人配置从未进入固件）
         mkdir -p files
+        # 私人配置为可选项：token 失效/克隆失败时警告并继续，不阻塞编译
+        # （run 38193260782 实锤：PRIVATE_REPO_TOKEN 已失效，原强校验写法
+        #  在第10 步 git clone 直接 exit 128，整轮 3 小时编译全部作废）
         if [ -n "$PRIVATE_REPO_TOKEN" ]; then
-          git clone --depth 1 \
+          if git clone --depth 1 \
             "https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/CF012026/x86-firmware-private.git" \
-            /tmp/private-files
-          cp -a /tmp/private-files/files/. files/
-          echo "===== 私人配置已合并（仅列文件名，不显示内容）====="
-          find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+            /tmp/private-files 2>/tmp/private-clone.err; then
+            cp -a /tmp/private-files/files/. files/
+            echo "===== 私人配置已合并（仅列文件名，不显示内容）====="
+            find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+          else
+            echo "::warning::私人配置仓库克隆失败（token 过期或无权限），本次固件不含 Lucky/EasyTier 私人配置"
+            tail -2 /tmp/private-clone.err
+          fi
         else
           echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
         fi
@@ -176,12 +183,18 @@ jobs:
     # ---------- 7.5 私人配置落位断言（防再犯拷贝顺序错误）----------
     - name: 私人配置落位断言
       run: |
+        # root 密码必须硬校验——它来自 ROOT_PASSWORD，不依赖私人仓库
+        test -e "openwrt/files/etc/uci-defaults/98-root-password" \
+          || { echo "::error::root 密码未烤入！"; exit 1; }
+        echo "✓ root 密码已落位"
+        # Lucky/EasyTier 私人配置为可选（token 可能失效 → run 38193260782 教训）：
+        # 缺失只警告，不阻断编译
+        MISSING=0
         for f in files/etc/config/lucky files/etc/config/lucky.daji/lucky.conf \
-                 files/etc/easytier/config.toml files/etc/config/easytier \
-                 files/etc/uci-defaults/98-root-password; do
-          test -e "openwrt/$f" || { echo "::error::openwrt/$f 缺失！私人配置/密码未烤入"; exit 1; }
+                 files/etc/easytier/config.toml files/etc/config/easytier; do
+          test -e "openwrt/$f" || { echo "::warning::openwrt/$f 不在（本次固件无私人配置，Lucky/EasyTier 需重配）"; MISSING=1; }
         done
-        echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
+        [ "$MISSING" -eq 0 ] && echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
 
     # ---------- 8. 生成配置并预下载依赖包 ----------
     - name: 生成配置并预下载
