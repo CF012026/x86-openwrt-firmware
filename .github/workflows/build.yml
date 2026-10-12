@@ -172,7 +172,12 @@ jobs:
         else
           echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
         fi
-        [ -e files ] && cp -r files openwrt/
+        # 同理不能用 [ -e files ] && cp：files 不存在时退出码 1 会中断 step
+        if [ -e files ]; then
+          cp -r files openwrt/
+        else
+          echo "::notice::无 files/ 目录（私人配置不可用），跳过拷贝"
+        fi
         # 基础配置 + 该变体对应的代理后端配置
         cat $CONFIG_FILE proxy-${{ matrix.proxy }}.config > openwrt/.config
         echo "===== 使用的基础配置 + proxy-${{ matrix.proxy }}.config ====="
@@ -194,7 +199,14 @@ jobs:
                  files/etc/easytier/config.toml files/etc/config/easytier; do
           test -e "openwrt/$f" || { echo "::warning::openwrt/$f 不在（本次固件无私人配置，Lucky/EasyTier 需重配）"; MISSING=1; }
         done
-        [ "$MISSING" -eq 0 ] && echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
+        # 注意：此处不能写成 [ "$MISSING" -eq 0 ] && echo "..."
+        # —— MISSING=1 时该表达式退出码为 1，在 bash -e 下会中断整个 step
+        # （run 38194161823 实锤：root 密码已校验通过，仍被这行误杀）
+        if [ "$MISSING" -eq 0 ]; then
+          echo "✓ 私人配置与 root 密码已全部落位 openwrt/files/"
+        else
+          echo "::notice::本次固件不含 Lucky/EasyTier 私人配置，首次使用需手动配置"
+        fi
 
     # ---------- 8. 生成配置并预下载依赖包 ----------
     - name: 生成配置并预下载
