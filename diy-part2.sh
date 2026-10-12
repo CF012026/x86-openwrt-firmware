@@ -72,13 +72,14 @@ else
     echo "::error::找不到 $DAED_MK —— feeds install 可能未完成，无法打工具链补丁"; exit 1
 fi
 
-# ---------- xray-core：钉到 26.7.28（最后一个支持 go 1.26 的版本） ----------
-# 背景（run 36233262099 实锤）：passwall feed 的 xray-core 已升到 26.9.9，
+# ---------- xray-core：钉到 26.7.28（可选，仅当 passwall feed 存在时） ----------
+# 2026-10-10 起本仓库已移除 PassWall/Nikki（x86.config 里全部 is not set），
+# xray-core 不再参与编译，因此这段钉版退化为「存在才钉、不存在就跳过」，
+# 绝不能因为文件缺失而 exit 1（那会让整个编译在第 8 步前就被打断）。
+# 原始背景（run 36233262099 实锤）：passwall feed 的 xray-core 已升到 26.9.9，
 # 其 go.mod 要求 go >= 1.27，而 openwrt-25.12 packages feed 只提供 go 1.26.8
 #（golang1.26/Makefile: GO_VERSION_PATCH:=8），GOTOOLCHAIN=local 下
 # "go.mod requires go >= 1.27.0" 直接编译失败，多线程/单线程重试都会死。
-# 26.7.28 的 go.mod 要求 go 1.26（与 25.12 的 1.26.8 匹配），Makefile 与
-# 26.9.9 版完全一致，仅 PKG_VERSION/PKG_HASH 两行不同，直接 sed 钉版本。
 XRAY_MK="feeds/passwall_packages/xray-core/Makefile"
 if [ -f "$XRAY_MK" ]; then
     sed -i -e 's|^PKG_VERSION:=.*|PKG_VERSION:=26.7.28|' \
@@ -88,7 +89,7 @@ if [ -f "$XRAY_MK" ]; then
         || { echo "::error::xray-core 版本钉子写入失败"; exit 1; }
     echo "== xray-core 已钉到 26.7.28（26.9.9 需要 go1.27，25.12 只有 go1.26.8）"
 else
-    echo "::error::找不到 $XRAY_MK —— passwall_packages feed install 可能未完成"; exit 1
+    echo "== 跳过 xray-core 钉版（PassWall 已移除，xray-core 不参与编译）"
 fi
 
 # ---------- Go 工具链升级：1.23.12 → 1.26.8（扩 bootstrap 链） ----------
