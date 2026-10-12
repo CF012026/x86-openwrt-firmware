@@ -1,0 +1,324 @@
+name: 编译 x86 完整复刻版（10/3 基线 + 中文包）
+
+# 10/3 固件（直连 1380 兆）的完美复刻：
+#   - openwrt 源码树整体钉在 10/3 当日提交 15421742a9ae（含 target/include/package/toolchain）
+#   - 14 条 feeds 全部钉在 10/3 当日 commit（来自 10/3 run 37108918681 的 feeds.buildinfo）
+#   - x86.config / diy 脚本取自 10/3 run 的仓库提交 9b36160
+#   - 唯一增量：CONFIG_LUCI_LANG_zh_Hans=y（中文语言包）
+# 若此固件测速仍 600 → "固件决定速度"前提被彻底推翻（差异在测速时段/线路环境）
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_ccache:
+        description: '清理 ccache 后全新编译'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-25.12
+  CONFIG_FILE: x86.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+  # 10/3 源码基线（openwrt-25.12 当日 tip，run 37108918681 实际克隆版本）
+  OWRT_PIN: 15421742a9ae7f17975d0c2bdeba9d299c981f49
+  # 10/3 固件仓库提交（diy 脚本与配置的原始出处）
+  FW_PIN: 9b36160f26f9a713b199e862e6695cf8fd6c54e0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        proxy: [daed]
+
+    runs-on: ubuntu-22.04
+
+    steps:
+    # ---------- 1. 检出仓库 ----------
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 初始化构建编号
+      run: echo "FILE_DATE=_$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
+
+    # ---------- 1.5 恢复 10/3 版 diy 脚本与配置 ----------
+    - name: 恢复 10/3 版文件
+      run: |
+        git fetch --depth=1 origin $FW_PIN
+        git checkout FETCH_HEAD -- diy-part1.sh diy-part2.sh x86.config proxy-daed.config
+        echo "===== 已恢复 10/3 版文件（diff 概要）====="
+        git diff --stat HEAD -- diy-part1.sh diy-part2.sh x86.config proxy-daed.config || true
+
+    # ---------- 2. 释放磁盘空间 ----------
+    - name: 释放磁盘空间
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
+    # ---------- 3. 安装编译依赖 ----------
+    - name: 安装编译依赖
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo timedatectl set-timezone "$TZ"
+        sudo apt update -y
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler dwarves ecj \
+          fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged \
+          help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev \
+          libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev \
+          libssl-dev libtool lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full \
+          patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools \
+          qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl \
+          unzip vim wget xmlto xxd zlib1g-dev zstd
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        echo "=== pahole 版本（daed 的 BTF 需要）==="
+        pahole --version || echo "  未安装 pahole"
+
+    # ---------- 4. 克隆源码并全量钉版到 10/3 ----------
+    - name: 克隆源码
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth 1 openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        # 整棵源码树回退到 10/3 当日提交（教训沉淀：目录级钉版有三类残留坑，
+        # 只有整树 checkout + rev-parse 断言才是真原子）
+        git -C openwrt fetch --depth=1 origin $OWRT_PIN
+        git -C openwrt checkout --detach FETCH_HEAD
+        [ "$(git -C openwrt rev-parse HEAD)" = "$OWRT_PIN" ] \
+          || { echo "::error::源码钉版失败，HEAD 不是 $OWRT_PIN"; exit 1; }
+        echo "===== ✓ 源码已全量钉版至 10/3 基线 $OWRT_PIN ====="
+        grep "LINUX_VERSION-6.12" openwrt/target/linux/generic/kernel-6.12
+
+    # ---------- 5. 追加第三方软件源（10/3 版脚本） ----------
+    - name: 加载自定义 feeds
+      run: |
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+        # feeds 全部钉到 10/3 当日 commit（取自 run 37108918681 的 feeds.buildinfo）
+        cat > feeds.conf.default << 'FEEDS'
+        src-git packages https://github.com/jjm2473/packages.git^c4b7a775192ac2ce6005c524a50bcc00e64fb164
+        src-git luci https://github.com/jjm2473/luci.git^63270f67915a01edaacb74a812a6f3a06c71c928
+        src-git routing https://git.openwrt.org/feed/routing.git^cc66db23430a923df3fe7941a097c5fd4040087b
+        src-git video https://github.com/openwrt/video.git^094bf58da6682f895255a35a84349a79dab4bf95
+        src-git small https://github.com/kenzok8/small^b1e56913a20872bf55ecc5641c6692e80183f5f6
+        src-git lucky https://github.com/gdy666/luci-app-lucky^c1730565c6df4ab30d345cf73584f03f5cc7bc8f
+        src-git easytier https://github.com/lmq8267/luci-app-easytier^5a6040b44bcc516c85e9eb3f79e2ddeb8830bcf1
+        src-git istore https://github.com/linkease/istore^a97ace34f2da358a015b094d326bba2697697f2e
+        src-git nas https://github.com/linkease/nas-packages.git^99052cfbaa4a451ed9c7959c89a2c47fa82e9c0a
+        src-git nas_luci https://github.com/linkease/nas-packages-luci.git^bc42130936af1f4e9556012755cd4a98fb116470
+        src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git^7b203f6c4c5e94c6c0026acb301090aa1d310e7f
+        src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git^3ba85f8264c82211b49f0655677ab3a0727a68cc
+        src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git^f9383b01c4873a11e6a4831efd414adedd212fe7
+        src-git third https://github.com/jjm2473/openwrt-third.git^335fa421e0fcd673a78986117981d4dfa3bf57d7
+        FEEDS
+        echo "===== feeds.conf.default 已钉版到 10/3 ====="
+        cat feeds.conf.default
+
+    # ---------- 6. 更新并安装 feeds ----------
+    - name: 更新 feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: 安装 feeds 软件包
+      run: |
+        cd openwrt
+        ./scripts/feeds install -a -p packages
+        ./scripts/feeds install -a -p luci
+        ./scripts/feeds install -a -p routing
+        ./scripts/feeds uninstall daed
+        ./scripts/feeds install -p small daed
+        test -e package/feeds/small/daed || { echo "::error::daed 未从 small feed 注册！"; exit 1; }
+        test ! -e package/feeds/packages/daed || { echo "::error::packages feed 的 daed 1.24.0 仍被注册！"; exit 1; }
+        echo "✓ daed 符号链接: $(readlink package/feeds/small/daed)"
+        ./scripts/feeds install lucky luci-app-lucky luci-i18n-lucky-zh-cn
+        ./scripts/feeds install easytier luci-app-easytier luci-i18n-easytier-zh-cn
+        ./scripts/feeds install -d y -p istore luci-app-store
+        ./scripts/feeds install -p nas_luci luci-app-quickstart luci-app-istorex \
+          luci-app-linkease luci-app-ddnsto luci-app-diskman luci-app-unishare luci-nginxer
+        # Nikki（feed 自带 mihomo-meta 内核，PROVIDES:=mihomo）
+        ./scripts/feeds install -p nikki nikki luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta
+        # PassWall（官方双 feed）
+        ./scripts/feeds install -p passwall_luci luci-app-passwall luci-i18n-passwall-zh-cn
+        for p in xray-core sing-box chinadns-ng geoview; do
+          ./scripts/feeds uninstall $p 2>/dev/null || true
+          ./scripts/feeds install -p passwall_packages $p
+        done
+        # Docker
+        ./scripts/feeds install dockerd docker docker-compose luci-app-dockerman
+        # Argon 主题 + argon-config
+        ./scripts/feeds install -p third luci-theme-argon luci-app-argon-config \
+          || { echo "::error::argon 从 third feed 注册失败！"; exit 1; }
+        ./scripts/feeds install -p third luci-i18n-argon-config-zh-cn 2>/dev/null \
+          || echo "（argon-config 中文包不存在于 third，跳过）"
+        test -e package/feeds/third/luci-theme-argon || { echo "::error::luci-theme-argon 未注册！"; exit 1; }
+        echo "===== 关键第三方包注册断言 ====="
+        for p in nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box chinadns-ng geoview \
+                 luci-app-store luci-app-quickstart luci-app-istorex luci-theme-argon luci-app-argon-config; do
+          found=$(ls -d package/feeds/*/$p 2>/dev/null | head -1)
+          [ -n "$found" ] || { echo "::error::$p 未在任何 feed 中注册！"; exit 1; }
+          echo "✓ $p -> $found"
+        done
+
+    # ---------- 7. 注入私人信息 + 拼接编译配置 ----------
+    - name: 注入私人信息
+      env:
+        ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+        PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+      run: |
+        mkdir -p files
+        if [ -n "$PRIVATE_REPO_TOKEN" ]; then
+          if git clone --depth 1 \
+            "https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/CF012026/x86-firmware-private.git" \
+            /tmp/private-files 2>/tmp/private-clone.err; then
+            cp -a /tmp/private-files/files/. files/
+            echo "===== 私人配置已合并 ====="
+            find files/etc/config/lucky.daji files/etc/easytier -type f 2>/dev/null | sed 's/^/   /'
+          else
+            echo "::warning::私人配置仓库克隆失败，复刻固件跳过私人配置"
+            cat /tmp/private-clone.err | tail -2
+          fi
+        else
+          echo "::warning::未设置 PRIVATE_REPO_TOKEN，固件将不含 Lucky/EasyTier 私人配置"
+        fi
+        [ -e files ] && cp -r files openwrt/
+        # 10/3 原版配置 + 唯一增量：中文语言包总开关
+        cat $CONFIG_FILE proxy-${{ matrix.proxy }}.config > openwrt/.config
+        echo "CONFIG_LUCI_LANG_zh_Hans=y" >> openwrt/.config
+        echo "===== 配置拼接完成（10/3 原版 + zh_Hans）====="
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    # ---------- 8. 生成配置并预下载依赖包 ----------
+    - name: 生成配置并预下载
+      run: |
+        cd openwrt
+        rm -rf tmp/info tmp/.packageinfo tmp/.config-package.in tmp/.config-target.in
+        make defconfig
+        echo "===== defconfig 后复刻断言 ====="
+        FAILED=0
+        # 唯一增量：中文包必须成规模出现
+        ZHCN=$(grep -c "^CONFIG_PACKAGE_luci-i18n-.*-zh-cn=y" .config || true)
+        echo "zh-cn 语言包数量: $ZHCN"
+        [ "$ZHCN" -ge 5 ] || { echo "::error::中文包数量异常（$ZHCN < 5）"; FAILED=1; }
+        # 10/3 包集完整性
+        for pkg in daed nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box \
+                   chinadns-ng geoview lucky luci-app-lucky easytier luci-app-easytier \
+                   luci-theme-argon luci-app-argon-config dockerd docker docker-compose \
+                   luci-app-dockerman luci-app-store luci-app-quickstart luci-app-istorex; do
+          grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || { echo "::error::${pkg} 未被选中（10/3 包集不完整）！"; FAILED=1; }
+        done
+        grep -q "^CONFIG_KERNEL_DEBUG_INFO_BTF=y" .config || { echo "::error::KERNEL_DEBUG_INFO_BTF 未开启"; FAILED=1; }
+        grep -q "^CONFIG_TARGET_ROOTFS_PARTSIZE=4096" .config || { echo "::error::ROOTFS_PARTSIZE 不是 4096"; FAILED=1; }
+        [ "$FAILED" -eq 0 ] || exit 1
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    # ---------- 9. 恢复 ccache ----------
+    - name: 恢复 ccache
+      if: ${{ !inputs.clean_ccache }}
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: ccache-x86-replica-${{ matrix.proxy }}-${{ github.sha }}
+        restore-keys: |
+          ccache-x86-replica-${{ matrix.proxy }}-
+
+    # ---------- 10. 编译固件 ----------
+    - name: 编译固件
+      run: |
+        cd openwrt
+        export USE_CCACHE=1
+        export CCACHE_DIR="$PWD/.ccache"
+        export CCACHE_COMPILERCHECK=content
+        export CCACHE_COMPRESS=1
+        export CCACHE_MAXSIZE=2G
+        echo "编译线程数: $(nproc)"
+        make -j$(($(nproc) + 1)) || make -j1 || make -j1 V=s
+        echo "FIRMWARE=$PWD/bin/targets/x86/64" >> $GITHUB_ENV
+
+    # ---------- 10.5 产物 manifest 终检 ----------
+    - name: 产物 manifest 终检
+      run: |
+        cd openwrt/bin/targets/x86/64
+        MANIFEST=$(ls *.manifest | head -1)
+        echo "===== $MANIFEST 复刻终检 ====="
+        FAILED=0
+        # 10/3 包集必须全部在场
+        for pkg in daed nikki luci-app-nikki mihomo-meta luci-app-passwall xray-core sing-box \
+                   chinadns-ng geoview lucky easytier luci-theme-argon dockerd docker \
+                   luci-app-dockerman luci-app-store luci-app-quickstart luci-app-istorex; do
+          grep -q "^${pkg} " "$MANIFEST" || { echo "::error::manifest 中没有 ${pkg}！"; FAILED=1; }
+        done
+        # 中文包必须存在
+        ZHCN=$(grep -c "zh-cn" "$MANIFEST" || true)
+        echo "manifest zh-cn 语言包数量: $ZHCN"
+        [ "$ZHCN" -ge 5 ] || { echo "::error::manifest 缺中文包"; FAILED=1; }
+        # daed 版本终检
+        grep -E "^daed - " "$MANIFEST" | grep -qE "^daed - 20[0-9]{2}\." \
+          || { echo "::error::daed 版本异常"; FAILED=1; }
+        [ "$FAILED" -eq 0 ] || exit 1
+        echo "===== 镜像总体积 ====="
+        ls -lh *.img.gz 2>/dev/null || ls -lh
+
+    # ---------- 11. 整理产物 ----------
+    - name: 整理固件
+      if: ${{ !cancelled() }}
+      run: |
+        cd openwrt/bin/targets/x86/64
+        rm -rf packages
+        ls -lh
+        df -hT
+
+    # ---------- 12. 上传固件 ----------
+    - name: 上传固件
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: X86-REPLICA-1003-${{ matrix.proxy }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+        retention-days: 30
+
+    # ---------- 13. 发布到 Releases ----------
+    - name: 发布到 Releases
+      if: ${{ success() }}
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: openwrt-x86-replica-1003-${{ env.FILE_DATE }}
+        name: X86 完整复刻版（10/3 基线 + 中文包）${{ env.FILE_DATE }}
+        files: |
+          ${{ env.FIRMWARE }}/*combined-efi*.img.gz
+        body: |
+          10/3 固件（直连 1380 兆基线）完美复刻 + 中文语言包
+          - openwrt 源码全量钉在 15421742a9ae（10/3 当日提交）
+          - 14 条 feeds 钉在 10/3 当日 commit
+          - 配置 = 10/3 原版（含 nikki/passwall 全家）+ LUCI_LANG_zh_Hans
+          - 用途：与 10/3 / 10/10 固件做同日交替 A/B 测速
+
+    # ---------- 14. 失败时上传配置诊断快照 ----------
+    - name: 上传诊断快照
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() && failure() }}
+      with:
+        name: config-debug-replica${{ env.FILE_DATE }}
+        path: |
+          openwrt/.config
+          openwrt/tmp/.config-package.in
+          openwrt/tmp/.packageinfo
+        retention-days: 14
+        include-hidden-files: true
