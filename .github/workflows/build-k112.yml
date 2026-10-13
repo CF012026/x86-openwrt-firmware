@@ -1,18 +1,19 @@
 name: 编译 x86 内核.112 单变量版（6/22 补丁集 + .112 内核）
 
 # 【单变量实验】唯一变量 = 内核版本 6.12.108 → 6.12.112
-#   - 源码钉死在 6/22 基线 15421742a9ae（与跑满那版完全同源）
-#   - 然后把内核版本号改成 .112（对应 upstream commit 12d27e86
-#     「kernel: bump 6.12 to 6.12.112」，10/3 提交）
+#   - 源码钉死在高速基线 15421742a9ae（与跑满那版同源）
+#   - 然后按 openwrt-25.12 官方升级链把内核升到 .112（4 个 bump commit +
+#     1 个 config 清理，git apply --3way 顺序应用），而不是手工 sed 版本号
 #   - feeds / diy 脚本 / 配置全部不变
 #
 # 用途：分离两个混淆变量。正在编的「最新源码版」同时变了内核(.108→.112)
-#   和全部补丁集(6/22→今天)，测慢了也分不清是谁的锅。本版只动内核：
+#   和全部补丁集(基线→今天)，测慢了也分不清是谁的锅。本版只动内核：
 #     - 跑满 → 内核 .112 无害，可以放心升级
-#     - 慢   → 内核 bump 就是元凶之一，锁定 12d27e86
+#     - 慢   → 内核 bump 就是元凶之一，锁定 .109~.112 这一串
 #
-# 注意：6.12.108 的 generic 补丁集配 6.12.112 内核，OpenWrt 官方允许
-#   （补丁多为版本无关），但若编译失败就是这个组合不兼容，属有效结论。
+# 历史：v1 只 sed 版本号不补 LINUX_KERNEL_HASH-6.12.112，download.pl 拿到
+#   默认 hash "x" 直接 die，toolchain/kernel-headers 秒挂（run 38329321806）。
+#   v2 起改为完整应用官方 bump 链，版本号与 hash 一起到位。
 
 # 10/3 固件（直连 1380 兆）的完美复刻：
 #   - openwrt 源码树整体钉在 10/3 当日提交 15421742a9ae（含 target/include/package/toolchain）
@@ -102,30 +103,75 @@ jobs:
         echo "=== pahole 版本（daed 的 BTF 需要）==="
         pahole --version || echo "  未安装 pahole"
 
-    # ---------- 4. 克隆源码（钉 6/22 基线）+ 只把内核版本改成 .112 ----------
+    # ---------- 4. 克隆源码（钉 6/22 基线）+ 按官方链把内核升到 .112 ----------
     - name: 克隆源码
       working-directory: /workdir
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth 1 openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        # 先整树钉回 6/22 高速基线（与跑满那版同源）
+        # 先整树钉回高速基线（与跑满那版同源）
         git -C openwrt fetch --depth=1 origin $OWRT_PIN
         git -C openwrt checkout --detach FETCH_HEAD
         [ "$(git -C openwrt rev-parse HEAD)" = "$OWRT_PIN" ] \
           || { echo "::error::源码钉版失败，HEAD 不是 $OWRT_PIN"; exit 1; }
-        echo "===== ✓ 源码已钉版至 6/22 基线 $OWRT_PIN ====="
+        echo "===== ✓ 源码已钉版至高速基线 $OWRT_PIN ====="
         # ---------- 本次唯一变量：内核 6.12.108 → 6.12.112 ----------
-        # 对应 upstream commit 12d27e86「kernel: bump 6.12 to 6.12.112」(10/3)
-        # 注意：本 step 的 working-directory 是 /workdir，源码在 /workdir/openwrt/ 下，
-        # 路径必须带 openwrt/ 前缀（run 38328784021 实锤：漏了前缀 → grep 报 No such file）
+        # 不自己 sed 版本号，而是按 openwrt-25.12 官方升级链依次应用（git apply --3way）：
+        #   4c8e22c44b84 .108→.109 (9/8)
+        #   498c40531db8 .109→.110 (9/14)
+        #   c337f787b55c 清理 .110 bump 刚加的 CONFIG_ARCH_HAS_PTDUMP=y（上游 .111 起该符号被删）
+        #   ebe71a07b859 .110→.111 (9/21)
+        #   12d27e860bd9 .111→.112 (10/3)
+        # 每个 bump = 版本号 + LINUX_KERNEL_HASH + 必要的 generic patch 行号刷新/增删。
+        # 已核实：这 5 个提交的文件集与期间其他 generic 改动（qmi_wwan b97f66de 等）无交集，
+        # 且钉版之后到 9/8 没有任何提交动过 target/linux/generic/，故可干净顺序应用。
+        #
+        # 【run 38329321806 失败根因，本次已根治】
+        #   旧版只 sed 版本号、不补 LINUX_KERNEL_HASH-6.12.112：
+        #   PKG_HASH 为空 → include/download.mk 的 Download/Defaults 把 HASH 回落成默认 "x"
+        #   → scripts/download.pl 的 hash_cmd() 见长度既不是 64 也不是 32、且不是 "skip"
+        #     → die "Cannot find appropriate hash command..." → toolchain/kernel-headers
+        #     191ms 秒挂（零网络请求）→ 无固件 → upload-artifact 报 Input required: path。
+        #   .108 当年能过，是因为树里本来就有 LINUX_KERNEL_HASH-6.12.108 那一行。
+        # GitHub 的 fetch-by-SHA 只认完整 40 位 SHA，缩写会报 couldn't find remote ref
+        git -C openwrt fetch --depth=2 origin \
+          4c8e22c44b84c39c0058d51421c183481f7e8f2f \
+          498c40531db8ac4bc8b8a0a06d0a94e6280851df \
+          c337f787b55c337b20cfdaa46e9f50412b1d275a \
+          ebe71a07b8596e8704a61aa8d737dd21cb2609aa \
+          12d27e860bd950a6759dca8a11ec2ae2cd0a3a8b
+        for BUMP in 4c8e22c44b84c39c0058d51421c183481f7e8f2f \
+                    498c40531db8ac4bc8b8a0a06d0a94e6280851df \
+                    c337f787b55c337b20cfdaa46e9f50412b1d275a \
+                    ebe71a07b8596e8704a61aa8d737dd21cb2609aa \
+                    12d27e860bd950a6759dca8a11ec2ae2cd0a3a8b; do
+          echo "===== 应用官方提交: $BUMP ====="
+          git -C openwrt log -1 --format="%s (%ad)" --date=short "$BUMP"
+          git -C openwrt diff "${BUMP}^" "${BUMP}" > "/tmp/bump-$BUMP.patch"
+          echo "改动文件数: $(grep -c '^diff --git' "/tmp/bump-$BUMP.patch")"
+          git -C openwrt apply --3way "/tmp/bump-$BUMP.patch" \
+            || { echo "::error::官方提交 $BUMP 应用失败（3-way 合并冲突）"; exit 1; }
+          if git -C openwrt diff --name-only --diff-filter=U | grep -q .; then
+            echo "::error::$BUMP 应用后残留未解决冲突"; exit 1
+          fi
+        done
         KF=openwrt/target/linux/generic/kernel-6.12
-        echo "--- 改前 ---"; grep "^LINUX_VERSION-6.12" "$KF"
-        sed -i 's|^LINUX_VERSION-6.12 = .108$|LINUX_VERSION-6.12 = .112|' "$KF"
+        echo "--- 升级后 kernel-6.12 头部 ---"; head -2 "$KF"
         grep -q "^LINUX_VERSION-6.12 = .112$" "$KF" \
-          || { echo "::error::内核版本号未改成 .112"; exit 1; }
-        echo "--- 改后 ---"; grep "^LINUX_VERSION-6.12" "$KF"
-        echo "===== ✓ 内核版本已改为 .112（除这行外全部保持 6/22）====="
+          || { echo "::error::内核版本号不是 .112"; exit 1; }
+        grep -q "^LINUX_KERNEL_HASH-6.12.112 = 164dc9d1f6c93c61a15e1f071c48379b467f2b17c469cce7223471968208ed03$" "$KF" \
+          || { echo "::error::LINUX_KERNEL_HASH-6.12.112 缺失或不正确（这正是上次失败的根因）"; exit 1; }
+        # 与官方 .112 状态核对 generic 目录：除故意不带的 qmi_wwan 功能提交
+        # （b97f66de：新增 788 patch + 改 780 patch）外，其余必须与官方完全一致
+        DIFF_FILES=$(git -C openwrt diff --name-only 12d27e860bd950a6759dca8a11ec2ae2cd0a3a8b -- target/linux/generic/ || true)
+        echo "--- 与官方 12d27e86(.112) 的 generic 目录差异（应只有 780/788 两个 qmi_wwan 文件）---"
+        echo "$DIFF_FILES"
+        UNEXPECTED=$(echo "$DIFF_FILES" | grep -v "780-usb-net-MeigLink_modem_support.patch" \
+          | grep -v "788-v7.3-net-usb-qmi_wwan" | grep -v '^$' || true)
+        [ -z "$UNEXPECTED" ] \
+          || { echo "::error::generic 目录与官方 .112 存在意外差异: $UNEXPECTED"; exit 1; }
+        echo "===== ✓ 内核已按官方方式升至 .112（版本+hash+随附刷新，其余全部保持基线）====="
 
     # ---------- 5. 追加第三方软件源（10/3 版脚本） ----------
     - name: 加载自定义 feeds
@@ -337,14 +383,18 @@ jobs:
         name: X86 内核.112 单变量版（6/22 补丁集 + .112 内核）${{ env.FILE_DATE }}
         files: |
           ${{ env.FIRMWARE }}/*combined-efi*.img.gz
-        body: |
-          单变量实验：6/22 补丁集 + 内核 6.12.112
-          - 源码：整树钉死在 15421742a9ae（6/22 高速基线，与跑满那版同源）
-          - **唯一变量**：内核版本 6.12.108 → 6.12.112
-            （对应 upstream 12d27e86「kernel: bump 6.12 to 6.12.112」）
-          - feeds / diy 脚本 / 配置：全部不变（FW_PIN 9b36160）
-          - 用途：分离「内核版本」与「补丁集」两个混淆变量
-            「最新源码版」同时变了两者，测慢分不清是谁的锅
+          body: |
+            单变量实验：高速基线补丁集 + 内核 6.12.112
+            - 源码：整树钉死在 15421742a9ae（高速基线，与跑满那版同源）
+            - **唯一变量**：内核版本 6.12.108 → 6.12.112
+              按官方链应用：4c8e22c4(.109) → 498c4053(.110) → c337f787(config 清理)
+              → ebe71a07(.111) → 12d27e86(.112)，含版本号 + LINUX_KERNEL_HASH
+              + 随附 generic patch 刷新
+            - feeds / diy 脚本 / 配置：全部不变（FW_PIN 9b36160）
+            - 用途：分离「内核版本」与「补丁集」两个混淆变量
+              「最新源码版」同时变了两者，测慢分不清是谁的锅
+            - 修复记录：v1 因只 sed 版本号漏配 hash，download.pl 收到默认 "x"
+              直接 die 导致 kernel-headers 下载秒挂（run 38329321806），v2 已根治
 
     # ---------- 14. 失败时上传配置诊断快照 ----------
     - name: 上传诊断快照
