@@ -117,12 +117,14 @@ jobs:
         echo "===== ✓ 源码已钉版至 6/22 基线 $OWRT_PIN ====="
         # ---------- 本次唯一变量：内核 6.12.108 → 6.12.112 ----------
         # 对应 upstream commit 12d27e86「kernel: bump 6.12 to 6.12.112」(10/3)
-        KF=target/linux/generic/kernel-6.12
-        echo "--- 改前 ---"; grep "^LINUX_VERSION-6.12" $KF
-        sed -i 's|^LINUX_VERSION-6.12 = .108$|LINUX_VERSION-6.12 = .112|' $KF
-        grep -q "^LINUX_VERSION-6.12 = .112$" $KF \
+        # 注意：本 step 的 working-directory 是 /workdir，源码在 /workdir/openwrt/ 下，
+        # 路径必须带 openwrt/ 前缀（run 38328784021 实锤：漏了前缀 → grep 报 No such file）
+        KF=openwrt/target/linux/generic/kernel-6.12
+        echo "--- 改前 ---"; grep "^LINUX_VERSION-6.12" "$KF"
+        sed -i 's|^LINUX_VERSION-6.12 = .108$|LINUX_VERSION-6.12 = .112|' "$KF"
+        grep -q "^LINUX_VERSION-6.12 = .112$" "$KF" \
           || { echo "::error::内核版本号未改成 .112"; exit 1; }
-        echo "--- 改后 ---"; grep "^LINUX_VERSION-6.12" $KF
+        echo "--- 改后 ---"; grep "^LINUX_VERSION-6.12" "$KF"
         echo "===== ✓ 内核版本已改为 .112（除这行外全部保持 6/22）====="
 
     # ---------- 5. 追加第三方软件源（10/3 版脚本） ----------
