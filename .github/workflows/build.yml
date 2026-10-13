@@ -23,6 +23,19 @@ env:
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   TZ: Asia/Shanghai
+  # ---------- 源码钉版（绝对不要改成跟随 main）----------
+  # 【血泪教训，2026-10-13】x86/64 旁路由（N5105）实测：
+  #   跑 10/3 当天 main 最新补丁集的固件 → 宽带只能跑 ~600 Mbps
+  #   跑钉死在此commit 的固件           → 网速跑满
+  # 已排除的因素（逐项实测）：底座(REPO_URL)、daed 版本与配置、代理节点、
+  #   flow_offloading、RPS、Nikki/PassWall 有无、内核版本号（都是 6.12.108）。
+  # 唯一变量是 6.12.108 之后的补丁集：openwrt/openwrt 在 6/22~10/3 之间有4929 个
+  # commit，其中含 nftables 1.1.7 / libnetfilter-conntrack 1.1.1 等netfilter 组件升级。
+  #   注意：底层网络栈升级修的是正确性与安全性，不保证吞吐，新版可能更慢。
+  # 该 commit 在 openwrt/openwrt 与 immortalwrt/immortalwrt 中都存在（两 fork 共同祖先，
+  # 2026-06-22「wifi-scripts: enforce WPA3 for all encryption types」），
+  # 所以它只能钉**源码版本**，与底座无关。
+  OWRT_PIN: 15421742a9ae7f17975d0c2bdeba9d299c981f49
 
 jobs:
   build:
@@ -75,13 +88,25 @@ jobs:
         echo "=== pahole 版本（daed 的 BTF 需要）==="
         pahole --version || echo "  未安装 pahole"
 
-    # ---------- 4. 克隆 ImmortalWrt 源码 ----------
+    # ---------- 4. 克隆源码（并钉版到已知高速基线）----------
     - name: 克隆源码
       working-directory: /workdir
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth 1 openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        # ---------- 源码钉版（见env.OWRT_PIN处的血泪教训说明）----------
+        # git clone --depth 1 拉的是 main 当天 tip，补丁集每天都在变，实测会导致
+        # 旁路由吞吐从跑满掉到 ~600 Mbps（底座/插件/daed 配置均已排除为变量）。
+        # 这里整树 checkout 到固定 commit，并用 rev-parse 做硬断言：
+        # 只有整树checkout + 断言才是真原子，单纯 git checkout <path> 不会删除
+        # 新增文件，会留下 737-* 之类残留导致 FWNODE_PCS 之类的编译失败。
+        git -C openwrt fetch --depth=1 origin $OWRT_PIN
+        git -C openwrt checkout --detach FETCH_HEAD
+        [ "$(git -C openwrt rev-parse HEAD)" = "$OWRT_PIN" ] \
+          || { echo "::error::源码钉版失败，HEAD 不是 $OWRT_PIN"; exit 1; }
+        echo "===== ✓ 源码已全量钉版至高速基线 $OWRT_PIN ====="
+        grep "LINUX_VERSION-6.12" openwrt/target/linux/generic/kernel-6.12
 
     # ---------- 5. 追加第三方软件源 ----------
     - name: 加载自定义 feeds
@@ -331,6 +356,21 @@ jobs:
           grep -qE "^${pkg} " "$MANIFEST" && { echo "::error::瘦身失败：${pkg} 混进了最终镜像！"; FAILED=1; }
         done
         [ "$FAILED" -eq 0 ] || exit 1
+        # ---------- 钉版终检（防悄悄编出慢速版）----------
+        # base-files 版本号格式为 1~<commit短hash>（设备实测：base-files-1~1542174，
+        # apk db 里 V:1~1542174）。它由源码 commit 生成，钉版生效时必然以 OWRT_PIN 前7 位结尾。
+        # 若不匹配，说明钉版被绕过（--depth 1 拉到 main 当天 tip）→ 实测会掉到 ~600 Mbps。
+        PIN_SHORT=$(echo "$OWRT_PIN" | cut -c1-7)
+        BF_VER=$(grep -E "^base-files - " "$MANIFEST" | awk '{print $3}')
+        if [ -z "$BF_VER" ]; then
+          echo "::warning::manifest 里没找到 base-files 行，跳过钉版校验"
+        elif echo "$BF_VER" | grep -q "$PIN_SHORT"; then
+          echo "===== ✓ 钉版校验通过：base-files = $BF_VER（含 $PIN_SHORT）"
+        else
+          echo "::error::钉版校验失败！base-files = $BF_VER，不含 $PIN_SHORT"
+          echo "::error::说明源码钉版被绕过，这版会复现 ~600 Mbps 的慢速问题！"
+          exit 1
+        fi
         echo "===== 镜像总体积 ====="
         ls -lh *.img.gz 2>/dev/null || ls -lh
 
